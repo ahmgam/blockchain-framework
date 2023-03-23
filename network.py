@@ -7,7 +7,8 @@ import uuid
 import datetime
 import rsa
 import os
-
+from random import choices
+from string import ascii_lowercase
 class CommunicationModule:
     def __init__(self,endpoint):
         self.endpoint = endpoint
@@ -26,10 +27,12 @@ class CommunicationModule:
             
 class NetworkInterface:
     
-    def __init__(self,endpoint,port,parent):
+    def __init__(self,endpoint,port,parent,secret_key):
         '''
         Initialize network interface
         '''
+        #define secret 
+        self.secret_key = secret_key
         #define dummy position
         self.pos = "0,0,0"
         #define node id
@@ -197,14 +200,23 @@ class NetworkInterface:
         else :
             return self.sk.sign(json.dumps(message).encode("utf-8"))
         
-    def verify(self,message,signature):
-        if self.pk == None:
-            return None
-        else:
-            return self.pk.verify(json.dumps(message).encode("utf-8"), signature)
+    def verify(self,message,signature,pk):
+        #define public key instance from string
+        pk = rsa.PublicKey.load_pkcs1(pk)
+        #verify signature
+        return pk.verify(json.dumps(message).encode("utf-8"), signature)
         
     def hash(self,message):
         return sha256(json.dumps(message).encode("utf-8")).hexdigest()
+    
+    def generate_challenge(self, length=20):
+        return ''.join(choices(ascii_lowercase, k=length))
+    
+    def solve_challenge(self,challenge):
+        solution = self.hash(challenge+self.secret_key)
+        client_sol = solution[0:len(solution)//2]
+        server_sol = solution[len(solution)//2:]
+        return client_sol, server_sol
     
     ################################
     # discovery protocol
@@ -212,6 +224,21 @@ class NetworkInterface:
     def discover(self):
         pass
         #discover new nodes on the network
+        #define data payload
+        msg_data = OrderedDict({
+            "timestamp": str(datetime.datetime.now()),
+                "counter": self.counter,
+                "data":{
+                    "pk": str(self.pk)
+                    }
+        })
+        #stringify the data payload
+        msg_data = json.dumps(msg_data)
+        #generate hash of the data payload
+        msg_hash = self.hash(msg_data)
+        #generate signature of the data payload
+        msg_signature = self.sign(msg_data)
+        #define message payload
         
         payload = {
             "node_id": self.node_id,
@@ -221,17 +248,16 @@ class NetworkInterface:
             "port": self.port,
             "session_id": "",
             "message":{
-                "timestamp": str(datetime.datetime.now()),
+            "timestamp": str(datetime.datetime.now()),
                 "counter": self.counter,
                 "data":{
                     "pk": str(self.pk)
                     }
-                }
+                },
+            "hash": msg_hash,
+            "signature": msg_signature
             }
-        print(payload)
         message = DiscoveryMessage(payload)
-        message.message['hash'] = message.get_hash()
-        #message.sign(self.sk)
         try:
             self.comm.send({"target": "all",
                     "message": message.to_dict(),
@@ -242,14 +268,280 @@ class NetworkInterface:
     def respond_to_discovery(self,message):
         pass
         #respond to discovery requests and send challenge
-        
+        #first verify the message
+        try:
+            message = DiscoveryMessage(message) 
+        except Exception as e:
+            print(e)
+            return None
+        #verify the message hash 
+        buff = message.message
+        msg_hash = buff.pop('hash')
+        msg_signature = buff.pop('signature')
+        msg_pk = buff["message"]["data"]["pk"]
+        if self.hash(buff) == msg_hash:
+            print("hash verified")
+        else:
+            print("hash not verified")
+            return None
+        #verify the message signature
+        if self.verify(buff,msg_signature,msg_pk):
+            print("signature verified")
+        else:
+            print("signature not verified")
+            return None
+        #check if the node is already connected to the network
+        if self.is_session_active(message.message["node_id"]):
+            print("session is already active")
+            return None
+        #check if the node has active discovery session with the sender
+        if self.get_discovery_session(message.message["node_id"]):
+            print("session is already active")
+            return None
+        else:
+            #create new session
+            session_data = {
+                "pk": msg_pk,
+                "counter": message.message["message"]["counter"],
+                "node_type": message.message["node_type"],     
+            }
+            self.create_discovery_session(message.message["node_id"],"server",session_data)
+        #prepare discovery response message
+        msg_data =OrderedDict( {
+                "timestamp": str(datetime.datetime.now()),
+                "counter": self.counter,
+                "data":{
+                    "pk": str(self.pk)
+                    }
+                })
+        #stringify the message
+        msg_data = json.dumps(msg_data)
+        #get message hash
+        data_hash = self.hash(msg_data)
+        #get message signature
+        data_signature = self.sign(msg_data)
+        #encrypt the message
+        data_encrypted = self.encrypt(msg_data,msg_pk)   
+        payload = {
+            "node_id": self.node_id,
+            "node_type": self.node_type,
+            "pos": self.pos,
+            "type": "discovery_response",
+            "port": self.port,
+            "session_id": "",
+            "message": data_encrypted,
+            "hash": data_hash,
+            "signature": data_signature
+            }
+        #send the message
+        try:
+            self.comm.send({"target": message.message["node_id"],
+                        "message": payload,
+                        "pos": self.pos})
+            print( f"discovery response sent to {message.message['node_id']} from {self.node_id}")
+        except Exception as e:
+            print(e)
+            
     def verify_discovery(self,message):
-        pass
+        
         #verify discovery request and send challenge response
+        #check if the node is already connected to the network
+        if self.is_session_active(message.message["node_id"]):
+            print("session is already active")
+            return None
+        
+        #decrypt the message
+        try:
+            decrypted_data = self.decrypt(message.message["message"],self.sk)
+            
+        except Exception as e:
+            print(f"error decrypting and parsing data : {e}")
+            return None
+        
+        #verify the message hash
+        if self.hash(decrypted_data) == message.message["hash"]:
+            print("hash verified")
+        else:
+            print("hash not verified")
+            return None
+        
+        #parse the message
+        decrypted_data = json.loads(decrypted_data)
+        #validate the message
+        message.message["message"] = decrypted_data
+        try :
+            message=DiscoveryResponseMessage(message.message)
+        except Exception as e:
+            print(f"error validating message : {e}")
+            return None
+        #verify the message signature
+        if self.verify(decrypted_data,message.message["signature"],decrypted_data["data"]["pk"]):
+            print("signature verified")
+        else:
+            print("signature not verified")
+            return None
+        #generate challenge random string
+        challenge = self.generate_challenge()
+        #solve the challenge
+        client_sol, server_sol = self.solve_challenge(challenge)
+        #create discovery session
+        session_data = {
+            "pk": decrypted_data["data"]["pk"],
+            "counter": message.message["message"]["counter"],
+            "node_type": message.message["node_type"],
+            "challenge": challenge,
+            "client_challenge_response": client_sol,
+            "server_challenge_response": server_sol
+        }
+        #create discovery session
+        self.create_discovery_session(message.message["node_id"],"client",session_data)
+        #prepare verification message 
+        msg_data = OrderedDict({
+                "timestamp": str(datetime.datetime.now()),
+                "counter": self.counter,
+                "data":{
+                    "challenge": challenge,
+                    "client_challenge_response": client_sol
+                    }
+                })
+        #stringify the message
+        msg_data = json.dumps(msg_data)
+        #get message hash
+        data_hash = self.hash(msg_data)
+        #get message signature
+        data_signature = self.sign(msg_data)
+        #encrypt the message
+        data_encrypted = self.encrypt(msg_data,pk)
+        payload = {
+            "node_id": self.node_id,
+            "node_type": self.node_type,
+            "pos": self.pos,
+            "type": "discovery_verification",
+            "port": self.port,
+            "session_id": "",
+            "data": data_encrypted,
+            "hash": data_hash,
+            "signature": data_signature
+            }
+        #send the message
+        try:
+            self.comm.send({"target": message.message["node_id"],
+                        "message": payload,
+                        "pos": self.pos})
+            print( f"discovery verification sent to {message.message['node_id']} from {self.node_id}")
+        except Exception as e:
+            print(e)
         
     def verify_discovery_response(self,message):
-        pass
+        
         #verify discovery response and add node to the network
+        #check if the node is already connected to the network
+        if self.is_session_active(message.message["node_id"]):
+            print("session is already active")
+            return None
+        #check if the node does not have active discovery session with the sender
+        session = self.get_discovery_session(message.message["node_id"])
+        if not session:
+            print("node does not have active discovery session with the sender")
+            return None
+        #get the public key of the sender from the session
+        pk = session["pk"]
+        #decrypt the message
+        try:
+            decrypted_data = self.decrypt(message.message["message"],self.sk)
+            
+        except Exception as e:
+            print(f"error decrypting and parsing data : {e}")
+            return None
+        
+        #verify the message hash
+        if self.hash(decrypted_data) == message.message["hash"]:
+            print("hash verified")
+        else:
+            print("hash not verified")
+            return None
+        #verify the message signature
+        if self.verify(decrypted_data,message.message["signature"],pk):
+            print("signature verified")
+        else:
+            print("signature not verified")
+            return None
+        #parse the message
+        decrypted_data = json.loads(decrypted_data)
+        #check if the message counter is valid
+        if decrypted_data["counter"] <= session["counter"]:
+            print("counter not valid")
+            return None
+        
+        #validate the message
+        message.message["message"] = decrypted_data
+        try :
+            message=VerificationMessage(message.message)
+        except Exception as e:
+            print(f"error validating message : {e}")
+            return None
+        
+        #generate challenge random string
+        challenge = decrypted_data["data"]["challenge"]
+        #solve the challenge
+        client_sol, server_sol = self.solve_challenge(challenge)
+        #compare the client challenge response
+        if decrypted_data["data"]["client_challenge_response"] == client_sol:
+            print("client challenge response verified")
+        else:
+            print("client challenge response not verified")
+            return None
+        #update discovery session
+        '''
+        session_data = {
+            "pk": pk,
+            "counter": message.message["message"]["counter"],
+            "node_type": message.message["node_type"],
+            "challenge": challenge,
+            "client_challenge_response": client_sol,
+            "server_challenge_response": server_sol
+        }
+        #create discovery session
+        self.create_discovery_session(message.message["node_id"],"client",session_data)
+        #prepare verification message 
+        msg_data = OrderedDict({
+                "timestamp": str(datetime.datetime.now()),
+                "counter": self.counter,
+                "data":{
+                    "challenge": challenge,
+                    "server_challenge_response": server_sol
+                    }
+                })
+        #stringify the message
+        msg_data = json.dumps(msg_data)
+        #get message hash
+        data_hash = self.hash(msg_data)
+        #get message signature
+        data_signature = self.sign(msg_data)
+        #encrypt the message
+        data_encrypted = self.encrypt(msg_data,pk)
+        payload = {
+            "node_id": self.node_id,
+            "node_type": self.node_type,
+            "pos": self.pos,
+            "type": "discovery_verification",
+            "port": self.port,
+            "session_id": "",
+            "data": data_encrypted,
+            "hash": data_hash,
+            "signature": data_signature
+            }
+        #send the message
+        try:
+            self.comm.send({"target": message.message["node_id"],
+                        "message": payload,
+                        "pos": self.pos})
+            print( f"discovery verification sent to {message.message['node_id']} from {self.node_id}")
+        except Exception as e:
+            print(e)
+        '''
+        
+        
     
     def approve_discovery(self,message):
         pass
@@ -264,19 +556,44 @@ class NetworkInterface:
  
     ################################
     # session management
-    ################################       
-    def create_session(self, pk,type):
+    ################################      
+    '''
+    discovery session shape :
+    {
+        {
+          "node_id": node_id,
+            "node_type": node_type,
+            "pk": public_key,
+            "counter": counter
+            "timestamp": timestamp
+            "status": status
+            "role": role
+            "challenge": challenge
+            "client_challenge_response": client_challenge_response
+            "server_challenge_response": server_challenge_response
+            "session_id": session_id  
+        }
+        
+    }
+    ''' 
+    def create_discovery_session(self, node_id ,role, data):
         pass
         #create new session with the given public key and type
     
-    def end_session(self, pk):
+    def end_session(self, node_id):
         pass
         #end session with the given public key
         
-    def get_session(self, pk):
+    def get_session(self, node_id):
         pass
         #get session with the given public key
         
+    def get_discovery_session(self, node_id):
+        pass
+        #get all discovery sessions
+    def is_session_active(self, node_id):
+        pass
+        #check if session with the given public key is active
     def get_sessions(self):
         pass
         #get all sessions   
@@ -307,7 +624,7 @@ class NetworkInterface:
         pass
         #listen for incoming connections
         
-    def encrypt(self, message):
+    def encrypt(self, message, pk=None):
         pass
         #encrypt message
         
