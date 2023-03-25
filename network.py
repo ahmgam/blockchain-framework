@@ -7,8 +7,10 @@ import uuid
 import datetime
 import rsa
 import os
+from cryptography.fernet import Fernet
 from random import choices
 from string import ascii_lowercase
+
 class CommunicationModule:
     def __init__(self,endpoint):
         self.endpoint = endpoint
@@ -114,7 +116,7 @@ class NetworkInterface:
         elif message.message["type"] == "discovery_approval":
             self.approve_discovery_response(message)
         elif message.message["type"] == "discovery_approval_response":
-            self.add_node(message)
+            self.finalize_discovery(message)
         elif message.message["type"] == "heartbeat":
             self.handle_heartbeat(message)
         elif message.message["type"] == "heartbeat_response":
@@ -218,11 +220,21 @@ class NetworkInterface:
         server_sol = solution[len(solution)//2:]
         return client_sol, server_sol
     
+    def generate_symmetric_key(self):
+        return Fernet.generate_key()
+    
+    def encrypt_symmetric(self,message,key):
+        f = Fernet(key)
+        return f.encrypt(message.encode("utf-8"))
+    
+    def decrypt_symmetric(self,ciphertext,tag,nonce,key):
+        f = Fernet(key)
+        return f.decrypt(ciphertext,tag,nonce)
+    
     ################################
     # discovery protocol
     ################################
     def discover(self):
-        pass
         #discover new nodes on the network
         #define data payload
         msg_data = OrderedDict({
@@ -266,7 +278,6 @@ class NetworkInterface:
             print(e)
         
     def respond_to_discovery(self,message):
-        pass
         #respond to discovery requests and send challenge
         #first verify the message
         try:
@@ -291,7 +302,7 @@ class NetworkInterface:
             print("signature not verified")
             return None
         #check if the node is already connected to the network
-        if self.is_session_active(message.message["node_id"]):
+        if self.has_active_connection_session(message.message["node_id"]):
             print("session is already active")
             return None
         #check if the node has active discovery session with the sender
@@ -302,10 +313,11 @@ class NetworkInterface:
             #create new session
             session_data = {
                 "pk": msg_pk,
+                "role":"server",
                 "counter": message.message["message"]["counter"],
                 "node_type": message.message["node_type"],     
             }
-            self.create_discovery_session(message.message["node_id"],"server",session_data)
+            self.create_discovery_session(message.message["node_id"],session_data)
         #prepare discovery response message
         msg_data =OrderedDict( {
                 "timestamp": str(datetime.datetime.now()),
@@ -343,10 +355,9 @@ class NetworkInterface:
             print(e)
             
     def verify_discovery(self,message):
-        
         #verify discovery request and send challenge response
         #check if the node is already connected to the network
-        if self.is_session_active(message.message["node_id"]):
+        if self.has_active_connection_session(message.message["node_id"]):
             print("session is already active")
             return None
         
@@ -387,6 +398,7 @@ class NetworkInterface:
         #create discovery session
         session_data = {
             "pk": decrypted_data["data"]["pk"],
+            "role": "client",
             "counter": message.message["message"]["counter"],
             "node_type": message.message["node_type"],
             "challenge": challenge,
@@ -394,7 +406,7 @@ class NetworkInterface:
             "server_challenge_response": server_sol
         }
         #create discovery session
-        self.create_discovery_session(message.message["node_id"],"client",session_data)
+        self.create_discovery_session(message.message["node_id"],session_data)
         #prepare verification message 
         msg_data = OrderedDict({
                 "timestamp": str(datetime.datetime.now()),
@@ -411,7 +423,7 @@ class NetworkInterface:
         #get message signature
         data_signature = self.sign(msg_data)
         #encrypt the message
-        data_encrypted = self.encrypt(msg_data,pk)
+        data_encrypted = self.encrypt(msg_data,decrypted_data["data"]["pk"])
         payload = {
             "node_id": self.node_id,
             "node_type": self.node_type,
@@ -433,10 +445,9 @@ class NetworkInterface:
             print(e)
         
     def verify_discovery_response(self,message):
-        
         #verify discovery response and add node to the network
         #check if the node is already connected to the network
-        if self.is_session_active(message.message["node_id"]):
+        if self.has_active_connection_session(message.message["node_id"]):
             print("session is already active")
             return None
         #check if the node does not have active discovery session with the sender
@@ -481,7 +492,7 @@ class NetworkInterface:
             print(f"error validating message : {e}")
             return None
         
-        #generate challenge random string
+        #get the challenge from the incoming message
         challenge = decrypted_data["data"]["challenge"]
         #solve the challenge
         client_sol, server_sol = self.solve_challenge(challenge)
@@ -492,18 +503,18 @@ class NetworkInterface:
             print("client challenge response not verified")
             return None
         #update discovery session
-        '''
         session_data = {
             "pk": pk,
+            "role": "server",
             "counter": message.message["message"]["counter"],
             "node_type": message.message["node_type"],
             "challenge": challenge,
             "client_challenge_response": client_sol,
             "server_challenge_response": server_sol
         }
-        #create discovery session
-        self.create_discovery_session(message.message["node_id"],"client",session_data)
-        #prepare verification message 
+        #update discovery session
+        self.update_discovery_session(message.message["node_id"],session_data)
+        #prepare verification message
         msg_data = OrderedDict({
                 "timestamp": str(datetime.datetime.now()),
                 "counter": self.counter,
@@ -518,16 +529,16 @@ class NetworkInterface:
         data_hash = self.hash(msg_data)
         #get message signature
         data_signature = self.sign(msg_data)
-        #encrypt the message
+        #encrypt the message    
         data_encrypted = self.encrypt(msg_data,pk)
         payload = {
             "node_id": self.node_id,
             "node_type": self.node_type,
             "pos": self.pos,
-            "type": "discovery_verification",
+            "type": "discovery_verification_response",
             "port": self.port,
             "session_id": "",
-            "data": data_encrypted,
+            "message": data_encrypted,
             "hash": data_hash,
             "signature": data_signature
             }
@@ -536,23 +547,304 @@ class NetworkInterface:
             self.comm.send({"target": message.message["node_id"],
                         "message": payload,
                         "pos": self.pos})
-            print( f"discovery verification sent to {message.message['node_id']} from {self.node_id}")
+            print( f"discovery verification response sent to {message.message['node_id']} from {self.node_id}")
         except Exception as e:
             print(e)
-        '''
-        
-        
-    
+            
     def approve_discovery(self,message):
-        pass
         #approve discovery request and send approval response
+        #check if the node is already connected to the network
+        if self.has_active_connection_session(message.message["node_id"]):
+            print("session is already active")
+            return None
+        #check if the node does not have active discovery session with the sender
+        session = self.get_discovery_session(message.message["node_id"])
+        if not session:
+            print("node does not have active discovery session with the sender")
+            return None
+        #get the public key of the sender from the session
+        pk = session["pk"]
+        #decrypt the message
+        try:
+            decrypted_data = self.decrypt(message.message["message"],self.sk)
+            
+        except Exception as e:
+            print(f"error decrypting and parsing data : {e}")
+            return None
+        
+        #verify the message hash
+        if self.hash(decrypted_data) == message.message["hash"]:
+            print("hash verified")
+        else:
+            print("hash not verified")
+            return None
+        #verify the message signature
+        if self.verify(decrypted_data,message.message["signature"],pk):
+            print("signature verified")
+        else:
+            print("signature not verified")
+            return None
+        #parse the message
+        decrypted_data = json.loads(decrypted_data)
+        #check if the message counter is valid
+        if decrypted_data["counter"] <= session["counter"]:
+            print("counter not valid")
+            return None
+        
+        #validate the message
+        message.message["message"] = decrypted_data
+        try :
+            message=VerificationResponseMessage(message.message)
+        except Exception as e:
+            print(f"error validating message : {e}")
+            return None
+        
+        #compare the client challenge response
+        if decrypted_data["data"]["server_challenge_response"] == session["server_challenge_response"]:
+            print("client challenge response verified")
+        else:
+            print("client challenge response not verified")
+            return None
+        
+        #creating new session with symmetric key and session id
+        #first generate symmetric key
+        key = self.generate_symmetric_key()
+        #get the session id
+        session_id = self.generate_session_id()
+        #create new session
+        session_data = {
+            "pk": pk,
+            "node_id": message.message["node_id"],
+            "last_active": str(datetime.datetime.now()),
+            "port": message.message["port"],
+            "role": "server",   
+            "counter": message.message["message"]["counter"],
+            "session_id": session_id,
+            "key": key,
+            "status": "active",
+            "last_heartbeat": str(datetime.datetime.now()),
+            "approved": False
+        }
+        self.create_connection_session(session_id,session_data)
+        #prepare approval message
+        msg_data = OrderedDict({
+                "timestamp": str(datetime.datetime.now()),
+                "counter": self.counter,
+                "data":{
+                    "session_id": session_id,
+                    "session_key": key,
+                    "test_message": self.encrypt_symmetric("client_test",key)
+                    }
+                })
+        #stringify the message
+        msg_data = json.dumps(msg_data)
+        #get message hash
+        data_hash = self.hash(msg_data)
+        #get message signature
+        data_signature = self.sign(msg_data)
+        #encrypt the message    
+        data_encrypted = self.encrypt(msg_data,pk)
+        payload = {
+            "node_id": self.node_id,
+            "node_type": self.node_type,
+            "pos": self.pos,
+            "type": "discovery_approval",
+            "port": self.port,
+            "session_id": "",
+            "message": data_encrypted,
+            "hash": data_hash,  
+            "signature": data_signature
+            }
+        #send the message
+        try:
+            self.comm.send({"target": message.message["node_id"],
+                        "message": payload,
+                        "pos": self.pos})
+            print( f"discovery approval sent to {message.message['node_id']} from {self.node_id}")
+        except Exception as e:
+            print(e)
+            
     def approve_discovery_response(self,message):
-        pass
         #approve discovery response and add node to the network
+        #check if the node is already connected to the network
+        if self.has_active_connection_session(message.message["node_id"]):
+            print("session is already active")
+            return None
+        #check if the node does not have active discovery session with the sender
+        session = self.get_discovery_session(message.message["node_id"])
+        if not session:
+            print("node does not have active discovery session with the sender")
+            return None
+        #get the public key of the sender from the session
+        pk = session["pk"]
+        #decrypt the message
+        try:
+            decrypted_data = self.decrypt(message.message["message"],self.sk)
+            
+        except Exception as e:
+            print(f"error decrypting and parsing data : {e}")
+            return None
+        
+        #verify the message hash
+        if self.hash(decrypted_data) == message.message["hash"]:
+            print("hash verified")
+        else:
+            print("hash not verified")
+            return None
+        #verify the message signature
+        if self.verify(decrypted_data,message.message["signature"],pk):
+            print("signature verified")
+        else:
+            print("signature not verified")
+            return None
+        #parse the message
+        decrypted_data = json.loads(decrypted_data)
+        #check if the message counter is valid
+        if decrypted_data["counter"] <= session["counter"]:
+            print("counter not valid")
+            return None
+        
+        #validate the message
+        message.message["message"] = decrypted_data
+        try :
+            message=ApprovalMessage(message.message)
+        except Exception as e:
+            print(f"error validating message : {e}")
+            return None
+        
+        
+        #decrypt the test message
+        try:
+            decrypted_test = self.decrypt_symmetric(decrypted_data["data"]["test_message"],session["key"])
+            if decrypted_test == "client_test":
+                print("test message decrypted")
+            else:
+                print("test message not decrypted")
+                return None
+        except Exception as e:
+            print(f"error decrypting test message : {e}")
+            return None
+        #first generate symmetric key
+        key = decrypted_data["data"]["session_key"]
+        #get the session id
+        session_id = decrypted_data["data"]["session_id"]
+        #create new session
+        session_data = {
+            "pk": pk,
+            "node_id": message.message["node_id"],
+            "last_active": str(datetime.datetime.now()),
+            "port": message.message["port"],
+            "role": "server",   
+            "counter": message.message["message"]["counter"],
+            "session_id": session_id,
+            "key": key,
+            "status": "active",
+            "last_heartbeat": str(datetime.datetime.now()),
+            "approved": True
+        }
+        self.create_connection_session(session_id,session_data)
+        #prepare approval message
+        msg_data = OrderedDict({
+                "timestamp": str(datetime.datetime.now()),
+                "counter": self.counter,
+                "data":{
+                    "session_id": session_id,
+                    "test_message": self.encrypt_symmetric("server_test",key)
+                    }
+                })
+        #stringify the message
+        msg_data = json.dumps(msg_data)
+        #get message hash
+        data_hash = self.hash(msg_data)
+        #get message signature
+        data_signature = self.sign(msg_data)
+        #encrypt the message    
+        data_encrypted = self.encrypt(msg_data,pk)
+        payload = {
+            "node_id": self.node_id,
+            "node_type": self.node_type,
+            "pos": self.pos,
+            "type": "discovery_approval",
+            "port": self.port,
+            "session_id": "",
+            "message": data_encrypted,
+            "hash": data_hash,  
+            "signature": data_signature
+            }
+        #send the message
+        try:
+            self.comm.send({"target": message.message["node_id"],
+                        "message": payload,
+                        "pos": self.pos})
+            print( f"discovery approval sent to {message.message['node_id']} from {self.node_id}")
+        except Exception as e:
+            print(e)
     
-    def get_nodes(self):
-        pass
-        #get all nodes on the network    
+    def finalize_discovery(self,message):
+        #approve discovery response and add node to the network
+        #check if the node does not have active discovery session with the sender
+        session = self.get_discovery_session(message.message["node_id"])
+        if not session:
+            print("node does not have active discovery session with the sender")
+            return None
+        #get the public key of the sender from the session
+        pk = session["pk"]
+        #decrypt the message
+        try:
+            decrypted_data = self.decrypt(message.message["message"],self.sk)
+            
+        except Exception as e:
+            print(f"error decrypting and parsing data : {e}")
+            return None
+        
+        #verify the message hash
+        if self.hash(decrypted_data) == message.message["hash"]:
+            print("hash verified")
+        else:
+            print("hash not verified")
+            return None
+        #verify the message signature
+        if self.verify(decrypted_data,message.message["signature"],pk):
+            print("signature verified")
+        else:
+            print("signature not verified")
+            return None
+        #parse the message
+        decrypted_data = json.loads(decrypted_data)
+        #check if the message counter is valid
+        if decrypted_data["counter"] <= session["counter"]:
+            print("counter not valid")
+            return None
+        
+        #validate the message
+        message.message["message"] = decrypted_data
+        try :
+            message=ApprovalResponseMessage(message.message)
+        except Exception as e:
+            print(f"error validating message : {e}")
+            return None
+        
+        
+        #decrypt the test message
+        try:
+            decrypted_test = self.decrypt_symmetric(decrypted_data["data"]["test_message"],session["key"])
+            if decrypted_test == "server_test":
+                print("test message decrypted")
+            else:
+                print("test message not decrypted")
+                return None
+        except Exception as e:
+            print(f"error decrypting test message : {e}")
+            return None
+        
+        #get the session id
+        session_id = decrypted_data["data"]["session_id"]
+        #update the session
+        session_data = {
+            "approved": True
+        }
+        self.update_connection_session(session_id,session_data)
+        
  
     ################################
     # session management
@@ -576,10 +868,13 @@ class NetworkInterface:
         
     }
     ''' 
-    def create_discovery_session(self, node_id ,role, data):
+    def create_discovery_session(self, node_id, data):
         pass
         #create new session with the given public key and type
     
+    def update_discovery_session(self, node_id, data):
+        pass
+        #update session with the given public key and type
     def end_session(self, node_id):
         pass
         #end session with the given public key
@@ -591,13 +886,26 @@ class NetworkInterface:
     def get_discovery_session(self, node_id):
         pass
         #get all discovery sessions
-    def is_session_active(self, node_id):
+    def has_active_connection_session(self, node_id):
         pass
         #check if session with the given public key is active
-    def get_sessions(self):
+    def get_connection_sessions(self,session_id):
         pass
         #get all sessions   
+        
+    def generate_session_id(self):
+        pass
+        #generate session id
+        
+    def create_connection_session(self, node_id, data):
+        pass
+        #create new session with the given public key and type
+        
+    def update_connection_session(self, node_id, data):
+        pass
+        #update session with the given public key and type
              
+    
     ################################
     # connection management
     ################################

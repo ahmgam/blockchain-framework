@@ -268,7 +268,7 @@ class ApprovalMessage(Message):
 class ApprovalResponseMessage(Message):
     def __init__(self,data):
         #definte required fields
-        required_fields = ["session_id","test_response"]
+        required_fields = ["session_id","test_message"]
         super().__init__(data,required_fields=required_fields)
                 
 if __name__ == "__main__":
