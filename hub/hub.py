@@ -81,7 +81,7 @@ class Hub :
         target_id = data['target']
         message = data['message']
         pos = data["pos"]
-        self.app.logger.warning(message)
+        self.app.logger.warning(f"Received message from {message['node_id']} to {target_id} with content {message['message']} and position {pos} at {datetime.datetime.now()}")
         #check if the node is already registered
         node = self.get_node(message['node_id'])
         if not node:
