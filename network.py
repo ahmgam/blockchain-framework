@@ -11,6 +11,7 @@ import queue
 from cryptography.fernet import Fernet
 from random import choices, randint
 from string import ascii_lowercase, digits, ascii_uppercase
+from base64 import  b64encode
 
 
 class CommunicationModule:
@@ -19,7 +20,7 @@ class CommunicationModule:
         self.auth = auth
     def send(self, message):
     
-        print(f'{datetime.datetime.now()} : Sending message to {message["target"]} with type {message["message"]["type"]}')
+        print(f'{datetime.datetime.now()} : Sending message to {message["target"]} with type {message["message"]["type"]} and content {message["message"]["hash"]}')
         headers = {'Content-Type': 'application/json'}
         if self.auth != None:
             headers['Authorization'] = self.auth
@@ -158,6 +159,7 @@ class NetworkInterface:
         '''
         #receive message from the network and put it in the queue
         self.queue.put({"type":"incoming","message":request.json })
+        return "OK"
         
     def handle(self):
         '''
@@ -165,11 +167,11 @@ class NetworkInterface:
         '''
         while True:
             #get message from queue
-            message = self.queue.get()
-            if message:
+            message_buffer = self.queue.get()
+            if message_buffer:
                 #check message type
-                if message["type"] == "incoming":
-                    message =Message(message["message"]) 
+                if message_buffer["type"] == "incoming":
+                    message =Message(message_buffer["message"]) 
                     if message.message["type"] == "discovery":
                         self.respond_to_discovery(message)
                     elif message.message["type"] == "discovery_response":
@@ -190,9 +192,9 @@ class NetworkInterface:
                         self.handle_data(message)
                     else:
                         print("unknown message type")
-                if message["type"] == "outgoing":
+                if message_buffer["type"] == "outgoing":
                     try:
-                        self.comm.send(message["message"])
+                        self.comm.send(message_buffer["message"])
                     except Exception as e:
                         print(e)
             else:
@@ -228,6 +230,9 @@ class NetworkInterface:
     ################################
     # key management
     ################################    
+    def format_bytes(self,b):
+        return bytes(b64encode(b)).decode('utf-8')
+    
     def generate_keys(self):
         '''
         generate new public and private key pair
@@ -286,7 +291,7 @@ class NetworkInterface:
     def hash_and_sign(self,message):
         hash = rsa.compute_hash(message.encode("latin-1"), 'SHA-1')
         signature = rsa.sign_hash(hash, self.sk, 'SHA-1')
-        return hash , signature
+        return self.format_bytes(hash) , self.format_bytes(signature)
     
     def generate_challenge(self, length=20):
         return ''.join(choices(ascii_lowercase, k=length))
@@ -352,8 +357,8 @@ class NetworkInterface:
         #msg_signature = self.sign(msg_data)
         msg_hash,msg_signature = self.hash_and_sign(msg_data)
         #add hash and signature to the payload
-        payload["hash"] = msg_hash
-        payload["signature"] = msg_signature
+        payload["hash"] = str(msg_hash)
+        payload["signature"] = str(msg_signature)
         #create message object
         message = DiscoveryMessage(payload)
         try:

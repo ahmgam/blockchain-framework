@@ -99,15 +99,16 @@ class Hub :
             if not node:
                 return jsonify({'error': 'node not found'}, 404)
             #send the message to the target node
-            if self.deliver_message(message,target["ip"],target["port"]):
+            try : 
+                self.deliver_message(message,target["ip"],target["port"])
                 #update served flag in message record
                 self.mark_message(msg)
                 return jsonify({'success': 'message sent'})
-            else: 
+            except:
                 return jsonify({'error': 'message received but not delivered'})
         else:
             #send the message to all nodes
-            self.broadcast_message(message)
+            self.brodcast_message(message)
             self.mark_message(msg)
             return jsonify({'success': 'message brodcasted'})
 

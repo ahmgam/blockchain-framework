@@ -199,8 +199,8 @@ class Message :
 
     def __validate(self,data):
         #validate the message
-        if not isinstance(data,dict):
-            raise TypeError("data must be a dictionary")
+        #if not (isinstance(data,dict) or isinstance(data,OrderedDict)):
+        #    raise TypeError("data must be a dictionary")
         for key in ["type","session_id","node_id","message","node_type","pos","port"]:
             if key not in data:
                 raise ValueError("field {} is required".format(key))

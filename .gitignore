@@ -1,7 +1,5 @@
-pk.pem
-network.py
-sk.pem
-__pycache__/messages.cpython-310.pyc
-hub/database.db
-__pycache__/messages.cpython-310.pyc
-
+*.pem
+**/*.db
+**/*.pem
+**/__pycache__/
+**/.vsocde
