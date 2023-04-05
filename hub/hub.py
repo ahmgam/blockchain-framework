@@ -108,7 +108,7 @@ class Hub :
                 return jsonify({'error': 'message received but not delivered'})
         else:
             #send the message to all nodes
-            self.brodcast_message(message)
+            self.brodcast_message(message,message['node_id'])
             self.mark_message(msg)
             return jsonify({'success': 'message brodcasted'})
 
@@ -214,11 +214,18 @@ class Hub :
         #mark a message as served
         self.db.query('UPDATE message SET served = 1 WHERE id = ?', (message_id,))
         
-    def brodcast_message(self, message):
+    def brodcast_message(self, message,exclude=None):
         #send a message to all nodes
         nodes = self.db.query('SELECT * FROM node')
         for node in nodes:
-            self.deliver_message(message, node['ip'], node['port'])
+            try:
+                if (node['node_id'] == exclude):
+                    continue
+                self.deliver_message(message, node['ip'], node['port'])
+            #handle timeout errors
+            except requests.exceptions.ConnectionError:
+                self.app.logger.warning('timeout error, node not found')
+                _ = self.db.query('DELETE FROM node WHERE node_id = ?', (node['node_id'],))
 if __name__ == '__main__':
     #set environment variables
     os.environ['HUB_DB'] = 'hub\database.db'

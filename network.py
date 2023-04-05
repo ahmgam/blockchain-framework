@@ -12,7 +12,7 @@ from cryptography.fernet import Fernet
 from random import choices, randint
 from string import ascii_lowercase, digits, ascii_uppercase
 from base64 import  b64encode
-
+import traceback
 
 class CommunicationModule:
     def __init__(self,endpoint,auth=None):
@@ -167,38 +167,45 @@ class NetworkInterface:
         '''
         while True:
             #get message from queue
-            message_buffer = self.queue.get()
-            if message_buffer:
-                #check message type
-                if message_buffer["type"] == "incoming":
-                    message =Message(message_buffer["message"]) 
-                    if message.message["type"] == "discovery":
-                        self.respond_to_discovery(message)
-                    elif message.message["type"] == "discovery_response":
-                        self.verify_discovery(message)
-                    elif message.message["type"] == "discovery_verification":
-                        self.verify_discovery_response(message)
-                    elif message.message["type"] == "discovery_verification_response":
-                        self.approve_discovery(message)
-                    elif message.message["type"] == "discovery_approval":
-                        self.approve_discovery_response(message)
-                    elif message.message["type"] == "discovery_approval_response":
-                        self.finalize_discovery(message)
-                    elif message.message["type"] == "heartbeat":
-                        self.handle_heartbeat(message)
-                    elif message.message["type"] == "heartbeat_response":
-                        self.handle_heartbeat_response(message)
-                    elif message.message["type"] == "data_exchange":
-                        self.handle_data(message)
-                    else:
-                        print("unknown message type")
-                if message_buffer["type"] == "outgoing":
-                    try:
-                        self.comm.send(message_buffer["message"])
-                    except Exception as e:
-                        print(e)
-            else:
-                print("no message")
+            try:
+                message_buffer = self.queue.get()
+                if message_buffer:
+                    #check message type
+                    if message_buffer["type"] == "incoming":
+                        message =Message(message_buffer["message"]) 
+                        if message.message["node_id"]==self.node_id:
+                            continue
+                        if message.message["type"] == "discovery":
+                            self.respond_to_discovery(message)
+                        elif message.message["type"] == "discovery_response":
+                            self.verify_discovery(message)
+                        elif message.message["type"] == "discovery_verification":
+                            self.verify_discovery_response(message)
+                        elif message.message["type"] == "discovery_verification_response":
+                            self.approve_discovery(message)
+                        elif message.message["type"] == "discovery_approval":
+                            self.approve_discovery_response(message)
+                        elif message.message["type"] == "discovery_approval_response":
+                            self.finalize_discovery(message)
+                        elif message.message["type"] == "heartbeat":
+                            self.handle_heartbeat(message)
+                        elif message.message["type"] == "heartbeat_response":
+                            self.handle_heartbeat_response(message)
+                        elif message.message["type"] == "data_exchange":
+                            self.handle_data(message)
+                        else:
+                            print("unknown message type")
+                    if message_buffer["type"] == "outgoing":
+                        try:
+                            self.comm.send(message_buffer["message"])
+                        except Exception as e:
+                            print(e)
+                else:
+                    print("no message")
+            except Exception as e:
+                #print traceback
+                print(e)
+                traceback.print_exc()
         #listen for incoming connections
         
     def discovery(self,comm):
@@ -302,12 +309,23 @@ class NetworkInterface:
         server_sol = solution[len(solution)//2:]
         return client_sol, server_sol
     
+    def format_public_key(self,pk):
+        #remove new line characters
+        pk = str(pk.save_pkcs1().decode('ascii'))
+        pk = pk.replace('\n-----END RSA PUBLIC KEY-----\n', '').replace('-----BEGIN RSA PUBLIC KEY-----\n','')
+        return pk
+        
+    def reformat_public_key(self,pk):
+        return f"-----BEGIN RSA PUBLIC KEY-----\n{str(pk)}\n-----END RSA PUBLIC KEY-----\n"
+        
     def generate_symmetric_key(self):
         return Fernet.generate_key()
         
     def encrypt(self, message, pk=None):
         if pk == None:
             pk = self.pk
+        if type(pk) == str:
+            pk = rsa.PublicKey.load_pkcs1(pk)
         #encrypt message
         return rsa.encrypt(message.encode("utf-8"), pk)
         
@@ -345,7 +363,7 @@ class NetworkInterface:
             "timestamp": str(datetime.datetime.now()),
                 "counter": self.counter,
                 "data":{
-                    "pk": str(self.pk)
+                    "pk": self.format_public_key(self.pk),
                     }
                 },
             })
@@ -372,7 +390,7 @@ class NetworkInterface:
         #respond to discovery requests and send challenge
         #first verify the message
         try:
-            message = DiscoveryMessage(message) 
+            message = DiscoveryMessage(message.message) 
         except Exception as e:
             print(e)
             return None
@@ -380,16 +398,17 @@ class NetworkInterface:
         buff = message.message
         msg_hash = buff.pop('hash')
         msg_signature = buff.pop('signature')
-        msg_pk = buff["message"]["data"]["pk"]
+        msg_pk =self.reformat_public_key(buff["message"]["data"]["pk"])
         #stringify the data payload
         msg_data = json.dumps(buff)
-        if self.hash(msg_data) == msg_hash:
+        hash,signature = self.hash_and_sign(msg_data)
+        if hash == msg_hash:
             print("hash verified")
         else:
             print("hash not verified")
             return None
         #verify the message signature
-        if self.verify(msg_data,msg_signature,msg_pk):
+        if signature==msg_signature:
             print("signature verified")
         else:
             print("signature not verified")
@@ -405,7 +424,7 @@ class NetworkInterface:
         else:
             #create new session
             session_data = {
-                "pk": msg_pk,
+                "pk": buff["message"]["data"]["pk"],
                 "role":"server",
                 "counter": message.message["message"]["counter"],
                 "node_type": message.message["node_type"],     
@@ -416,7 +435,7 @@ class NetworkInterface:
                 "timestamp": str(datetime.datetime.now()),
                 "counter": self.counter,
                 "data":{
-                    "pk": str(self.pk)
+                    "pk": self.format_public_key(self.pk)
                     }
                 })
         #stringify the message
@@ -435,10 +454,8 @@ class NetworkInterface:
             }
         #stringify the message
         payload_data = json.dumps(payload)
-        #get message hash
-        data_hash = self.hash(payload_data)
-        #get message signature
-        data_signature = self.sign(payload_data)
+        #get message hash,signature
+        data_hash,data_signature = self.hash_and_sign(payload_data)
         #add hash and signature to the message
         payload["hash"] = data_hash
         payload["signature"] = data_signature
