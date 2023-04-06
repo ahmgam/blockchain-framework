@@ -204,9 +204,7 @@ class Message :
         for key in ["type","session_id","node_id","message","node_type","pos","port"]:
             if key not in data:
                 raise ValueError("field {} is required".format(key))
-        for key in ["timestamp","counter","data"]:
-            if key not in data["message"]:
-                raise ValueError("field {} in message is required".format(key))
+
             
     def __repr__(self):
         return json.dumps(self.message)

@@ -108,8 +108,11 @@ class Hub :
                 return jsonify({'error': 'message received but not delivered'})
         else:
             #send the message to all nodes
+            print(" brodcasting message")
             self.brodcast_message(message,message['node_id'])
+            print(" brodcasted message")
             self.mark_message(msg)
+            print(" marked message")
             return jsonify({'success': 'message brodcasted'})
 
     @staticmethod
@@ -204,7 +207,7 @@ class Hub :
     
     def deliver_message(self, message,target_ip,target_port):
         #deliver a message to the target node
-        req = requests.post('http://'+target_ip+':'+str(target_port)+'/', json=message)
+        req = requests.post('http://'+target_ip+':'+str(target_port)+'/', json=message, timeout=1)
         if req.status_code == 200:
             return True
         else:
@@ -221,11 +224,12 @@ class Hub :
             try:
                 if (node['node_id'] == exclude):
                     continue
+                print(" brodcasting message to ",node['node_id'])
                 self.deliver_message(message, node['ip'], node['port'])
             #handle timeout errors
             except requests.exceptions.ConnectionError:
                 self.app.logger.warning('timeout error, node not found')
-                _ = self.db.query('DELETE FROM node WHERE node_id = ?', (node['node_id'],))
+                self.db.query('DELETE FROM node WHERE node_id = ?', (node['node_id'],))
 if __name__ == '__main__':
     #set environment variables
     os.environ['HUB_DB'] = 'hub\database.db'
