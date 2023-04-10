@@ -15,14 +15,15 @@ from base64 import  b64encode, b64decode
 from math import ceil
 
 class CommunicationModule:
-    def __init__(self,endpoint,auth=None,timeout=5):
+    def __init__(self,endpoint,auth=None,timeout=5,DEBUG=False):
         self.endpoint = endpoint
         self.auth = auth
         self.timeout = timeout
         self.counter = 0
+        self.DEBUG = DEBUG
     def send(self, message):
-    
-        print(f'{datetime.datetime.now()} : Sending message to {message["target"]} with type {message["message"]["type"]} and content {message["message"]["hash"]}')
+        if self.DEBUG:
+            print(f'{datetime.datetime.now()} : Sending message to {message["target"]} with type {message["message"]["type"]} and content {message["message"]["hash"]}')
         headers = {'Content-Type': 'application/json'}
         if self.auth != None:
             headers['Authorization'] = self.auth
@@ -31,23 +32,26 @@ class CommunicationModule:
                                 json = message,
                                 headers = headers,timeout=self.timeout)
         except Exception as e:
-            print(f"Error sending message: {e}")
+            if self.DEBUG:
+                print(f"Error sending message: {e}")
             return False
         if req.status_code == 200:
             self.counter += 1
             return True
         else :
-            print(f"Error sending message: {req.status_code}")
+            if self.DEBUG:
+                print(f"Error sending message: {req.status_code}")
             return False
     
             
             
 class NetworkInterface:
     
-    def __init__(self,endpoint,port,parent,secret_key,auth=None):
+    def __init__(self,endpoint,port,parent,secret_key,auth=None,DEBUG=False):
         '''
         Initialize network interface
         '''
+        self.DEBUG = DEBUG
         #define secret 
         self.secret_key = secret_key
         #define dummy position
@@ -81,7 +85,12 @@ class NetworkInterface:
         self.queue = queue.Queue()
         #define listening flask
         self.server = Flask(__name__)
+        #disable logging if not in debug mode
+        if not self.DEBUG:
+            self.server.logger.disabled = True
         self.server.add_url_rule('/', 'listen',lambda : self.listen(self), methods=['POST'])
+        #add message send endpoint
+        self.server.add_url_rule('/send', 'send',lambda : self.send(self), methods=['POST'])
         #self.server.add_url_rule('/', 'listen',self.listen, methods=['POST'])
 
         #define heartbeat thread
@@ -103,11 +112,15 @@ class NetworkInterface:
         #start flask server
         self.server.run( port=self.port)
         
-    #@staticmethod 
-    def send(self,node_id,message):
+    @staticmethod 
+    def send(self):
         '''
         Send message to the given public key
         '''
+        #get data 
+        data = request.json
+        node_id = data["node_id"]
+        message = data["message"]
         #check if session is available
         if self.has_active_connection_session(node_id):
             #get session
@@ -136,11 +149,9 @@ class NetworkInterface:
                 "message": encrypted_data
                 })
             #stringify message payload
-            msg_payload = json.dumps(msg_payload)
-            #sign message payload
-            msg_signature = self.sign(msg_payload)
-            #hash message payload
-            msg_hash = self.hash(msg_payload)
+            msg_payload_str = json.dumps(msg_payload)
+            #hash and sign message payload
+            msg_hash,msg_signature = self.hash_and_sign(msg_payload_str)
             #add signature and hash to message payload
             msg_payload["signature"] = msg_signature
             msg_payload["hash"] = msg_hash
@@ -150,7 +161,7 @@ class NetworkInterface:
                 "message": msg_payload,
                 "pos": self.pos,
             }},"outgoing")
-            
+            return Response("OK", status=200)
     @staticmethod
     def listen(self):
         '''
@@ -158,7 +169,7 @@ class NetworkInterface:
         '''
         #receive message from the network and put it in the queue
         self.queue.put({"type":"incoming","message":request.json })
-        return "OK"
+        return Response("OK", status=200)
         
     def handle(self):
         '''
@@ -177,46 +188,57 @@ class NetworkInterface:
                             continue
                         
                         if message.message["type"] == "discovery":
-                            print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting response_to_discovery")
+                            if self.DEBUG:
+                                print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting response_to_discovery")
                             self.respond_to_discovery(message)
                         elif message.message["type"] == "discovery_response":
-                            print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting verify_discovery")
+                            if self.DEBUG:
+                                print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting verify_discovery")
                             self.verify_discovery(message)
                         elif message.message["type"] == "discovery_verification":
-                            print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting verify_discovery_response")
+                            if self.DEBUG:
+                                print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting verify_discovery_response")
                             self.verify_discovery_response(message)
                         elif message.message["type"] == "discovery_verification_response":
-                            print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting approve_discovery")
+                            if self.DEBUG:
+                                print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting approve_discovery")
                             self.approve_discovery(message)
                         elif message.message["type"] == "discovery_approval":
-                            print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting approve_discovery_response")
+                            if self.DEBUG:
+                                print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting approve_discovery_response")
                             self.approve_discovery_response(message)
                         elif message.message["type"] == "discovery_approval_response":
-                            print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting finalize_discovery")
+                            if self.DEBUG:
+                                print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting finalize_discovery")
                             self.finalize_discovery(message)
                         elif message.message["type"] == "heartbeat":
-                            print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting handle_heartbeat")
+                            if self.DEBUG:
+                                print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting handle_heartbeat")
                             self.handle_heartbeat(message)
                         elif message.message["type"] == "heartbeat_response":
-                            print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting handle_heartbeat_response")
+                            if self.DEBUG:
+                                print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting handle_heartbeat_response")
                             self.handle_heartbeat_response(message)
                         elif message.message["type"] == "data_exchange":
-                            print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting handle_data")
+                            if self.DEBUG:
+                                print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting handle_data")
                             self.handle_data(message)
                         else:
-                            
-                            print(f"unknown message type {message.message['type']}")
+                            if self.DEBUG:
+                                print(f"unknown message type {message.message['type']}")
                     elif str(message_buffer["type"]) == "outgoing":
                         
                         try:
                             self.comm.send(message_buffer["message"])
                         except Exception as e:
-                            print(e)
+                            if self.DEBUG:
+                                print(e)
                     else:
-                        print(f'unknown message type {message_buffer["type"]}')
+                        if self.DEBUG:
+                            print(f'unknown message type {message_buffer["type"]}')
             except Exception as e:
-                print(e)
-                print("error in handling message")
+                if self.DEBUG:
+                    print(f"error in handling message: {e}")
                 continue
            
         #listen for incoming connections
@@ -230,7 +252,6 @@ class NetworkInterface:
             sleep(self.discovery_interval)
             self.discover()
             
-        
     def heartbeat(self):
         '''
         send heartbeat to all nodes
@@ -241,12 +262,11 @@ class NetworkInterface:
             for session_id, session in self.connection_sessions.items():
                 #check if time interval is passed
                 session_time = mktime(datetime.datetime.now().timetuple()) - session["last_heartbeat"]
-                if session_time > self.heartbeat_interval:
+                if session_time > self.heartbeat_interval and session["status"] == "active":
                     #send heartbeat
                     self.send_heartbeat(session)
                     #update last heartbeat time
                     self.connection_sessions[session_id]["last_heartbeat"] = mktime(datetime.datetime.now().timetuple())
-
                     sleep(1)
         
     ################################
@@ -334,7 +354,7 @@ class NetworkInterface:
         return f"-----BEGIN RSA PUBLIC KEY-----\n{str(pk)}\n-----END RSA PUBLIC KEY-----\n"
         
     def generate_symmetric_key(self):
-        return Fernet.generate_key()
+        return Fernet.generate_key().decode("ascii")
          
     def encrypt(self, message, pk=None):
         if pk == None:
@@ -364,12 +384,12 @@ class NetworkInterface:
             return None
     
     def encrypt_symmetric(self,message,key):
-        f = Fernet(key)
-        return f.encrypt(message.encode("utf-8"))
+        f = Fernet(key.encode("ascii"))
+        return b64encode(f.encrypt(message.encode("utf-8"))).decode('utf-8')
     
-    def decrypt_symmetric(self,ciphertext,tag,nonce,key):
-        f = Fernet(key)
-        return f.decrypt(ciphertext,tag,nonce)
+    def decrypt_symmetric(self,ciphertext,key):
+        f = Fernet(key.encode("ascii"))
+        return f.decrypt(b64decode(ciphertext.encode('utf-8'))).decode("ascii")
     
     ################################
     # discovery protocol
@@ -402,12 +422,9 @@ class NetworkInterface:
         payload["signature"] = str(msg_signature)
         #create message object
         message = DiscoveryMessage(payload)
-        try:
-            self.put_queue({"target": "all",
-                    "message": message.message,
-                    "pos": self.pos}, "outgoing")
-        except Exception as e:
-            print(e)
+        self.put_queue({"target": "all",
+                "message": message.message,
+                "pos": self.pos}, "outgoing")
         
     def respond_to_discovery(self,message):
         #respond to discovery requests and send challenge
@@ -415,7 +432,8 @@ class NetworkInterface:
         try:
             message = DiscoveryMessage(message.message) 
         except Exception as e:
-            print(e)
+            if self.DEBUG:
+                print(f"validation error {e}")
             return None
         #verify the message hash 
         buff = message.message
@@ -426,19 +444,23 @@ class NetworkInterface:
         msg_data = json.dumps(buff)
         hash,signature = self.hash_and_sign(msg_data)
         if hash != msg_hash:
-            print("hash not verified")
+            if self.DEBUG:
+                print("hash not verified")
             return None
         #verify the message signature
         if signature!=msg_signature:
-            print("signature not verified")
+            if self.DEBUG:
+                print("signature not verified")
             return None
         #check if the node is already connected to the network
         if self.has_active_connection_session(message.message["node_id"]):
-            print("connection session is already active")
+            if self.DEBUG:
+                print("connection session is already active") 
             return None
         #check if the node has active discovery session with the sender
         if self.get_discovery_session(message.message["node_id"]):
-            print("discovery session is already active")
+            if self.DEBUG:    
+                print("discovery session is already active")
             return None
         else:
             #create new session
@@ -479,19 +501,16 @@ class NetworkInterface:
         payload["hash"] = data_hash
         payload["signature"] = data_signature
         #send the message
-        try:
-            self.put_queue({"target": message.message["node_id"],
-                        "message": payload,
-                        "pos": self.pos}, "outgoing")
-        except Exception as e:
-            print("error sending discovery to queue")
-            print(e)
-            
+        self.put_queue({"target": message.message["node_id"],
+                    "message": payload,
+                    "pos": self.pos}, "outgoing")
+    
     def verify_discovery(self,message):
         #verify discovery request and send challenge response
         #check if the node is already connected to the network
         if self.has_active_connection_session(message.message["node_id"]):
-            print("connection session is already active")
+            if self.DEBUG:    
+                print("connection session is already active")
             return None
         #verify the message hash 
         buff = message.message
@@ -501,18 +520,21 @@ class NetworkInterface:
         #verify the message hash and signature
         hash , signature = self.hash_and_sign(msg_data)
         if hash != msg_hash:
-            print("hash not verified")
+            if self.DEBUG:
+                print("hash not verified")
             return None
         #verify the message signature
         if signature!=msg_signature:
-            print("signature not verified")
+            if self.DEBUG:    
+                print("signature not verified")
             return None
         #decrypt the message
         try:
             decrypted_data = self.decrypt(message.message["message"])
             
         except Exception as e:
-            print(f"error decrypting and parsing data : {e}")
+            if self.DEBUG:    
+                print(f"error decrypting and parsing data : {e}")
             return None
         #parse the message
         decrypted_data = json.loads(decrypted_data)
@@ -521,7 +543,8 @@ class NetworkInterface:
         try :
             message=DiscoveryResponseMessage(message.message)
         except Exception as e:
-            print(f"error validating message : {e}")
+            if self.DEBUG:
+                print(f"error validating message : {e}")
             return None
         #generate challenge random string
         challenge = self.generate_challenge()
@@ -570,23 +593,22 @@ class NetworkInterface:
         payload["hash"] = data_hash
         payload["signature"] = data_signature
         #send the message
-        try:
-            self.put_queue({"target": message.message["node_id"],
-                        "message": payload,
-                        "pos": self.pos},"outgoing")
-        except Exception as e:
-            print(e)
-        
+        self.put_queue({"target": message.message["node_id"],
+                    "message": payload,
+                    "pos": self.pos},"outgoing")
+ 
     def verify_discovery_response(self,message):
         #verify discovery response and add node to the network
         #check if the node is already connected to the network
         if self.has_active_connection_session(message.message["node_id"]):
-            print("connection session is already active")
+            if self.DEBUG:
+                print("connection session is already active")
             return None
         #check if the node does not have active discovery session with the sender
         session = self.get_discovery_session(message.message["node_id"])
         if not session:
-            print("node does not have active discovery session with the sender")
+            if self.DEBUG:
+                print("node does not have active discovery session with the sender")
             return None
         
         #verify the message hash 
@@ -598,10 +620,12 @@ class NetworkInterface:
         #verify the message hash and signature
         hash , signature = self.hash_and_sign(msg_data)
         if hash != msg_hash:
-            print("hash not verified")
+            if self.DEBUG:
+                print("hash not verified")
             return None
         if signature!=msg_signature:
-            print("signature not verified")
+            if self.DEBUG:
+                print("signature not verified")
             return None
         #get the public key of the sender from the session
         pk = session["pk"]
@@ -610,14 +634,16 @@ class NetworkInterface:
             decrypted_data = self.decrypt(message.message["message"])
             
         except Exception as e:
-            print(f"error decrypting and parsing data : {e}")
+            if self.DEBUG:
+                print(f"error decrypting and parsing data : {e}")
             return None
         
         #parse the message
         decrypted_data = json.loads(decrypted_data)
         #check if the message counter is valid
         if decrypted_data["counter"] <= session["counter"]:
-            print("counter not valid")
+            if self.DEBUG:
+                print("counter not valid")
             return None
         
         #validate the message
@@ -625,7 +651,8 @@ class NetworkInterface:
         try :
             message=VerificationMessage(message.message)
         except Exception as e:
-            print(f"error validating message : {e}")
+            if self.DEBUG:
+                print(f"error validating message : {e}")
             return None
         
         #get the challenge from the incoming message
@@ -634,7 +661,8 @@ class NetworkInterface:
         client_sol, server_sol = self.solve_challenge(challenge)
         #compare the client challenge response
         if decrypted_data["data"]["client_challenge_response"] != client_sol:
-            print("client challenge response not verified")
+            if self.DEBUG:
+                print("client challenge response not verified")
             return None
         #update discovery session
         session_data = {
@@ -678,23 +706,22 @@ class NetworkInterface:
         payload["hash"] = data_hash
         payload["signature"] = data_signature
         #send the message
-        try:
-            self.put_queue({"target": message.message["node_id"],
-                        "message": payload,
-                        "pos": self.pos},"outgoing")
-        except Exception as e:
-            print(e)
-            
+        self.put_queue({"target": message.message["node_id"],
+                    "message": payload,
+                    "pos": self.pos},"outgoing")
+
     def approve_discovery(self,message):
         #approve discovery request and send approval response
         #check if the node is already connected to the network
         if self.has_active_connection_session(message.message["node_id"]):
-            print("connection session is already active")
+            if self.DEBUG:
+                print("connection session is already active")
             return None
         #check if the node does not have active discovery session with the sender
         session = self.get_discovery_session(message.message["node_id"])
         if not session:
-            print("node does not have active discovery session with the sender")
+            if self.DEBUG:
+                print("node does not have active discovery session with the sender")
             return None
         #get the public key of the sender from the session
         pk = session["pk"]
@@ -709,23 +736,27 @@ class NetworkInterface:
             decrypted_data = self.decrypt(message.message["message"])
             
         except Exception as e:
-            print(f"error decrypting and parsing data : {e}")
+            if self.DEBUG:
+                print(f"error decrypting and parsing data : {e}")
             return None
         #get hash and signature
         hash , signature = self.hash_and_sign(msg_data)
         #verify the message hash
         if hash != msg_hash:
-            print("hash not verified")
+            if self.DEBUG:
+                print("hash not verified")
             return None
         #verify the message signature
         if signature!=msg_signature:
-            print("signature not verified")
+            if self.DEBUG:
+                print("signature not verified")
             return None
         #parse the message
         decrypted_data = json.loads(decrypted_data)
         #check if the message counter is valid
         if decrypted_data["counter"] <= session["counter"]:
-            print("counter not valid")
+            if self.DEBUG:
+                print("counter not valid")
             return None
         
         #validate the message
@@ -733,12 +764,13 @@ class NetworkInterface:
         try :
             message=VerificationResponseMessage(message.message)
         except Exception as e:
-            print(f"error validating message : {e}")
+            if self.DEBUG:
+                print(f"error validating message : {e}")
             return None
-        
         #compare the client challenge response
         if decrypted_data["data"]["server_challenge_response"] != session["server_challenge_response"]:
-            print("client challenge response not verified")
+            if self.DEBUG:
+                print("client challenge response not verified")
             return None
         
         #creating new session with symmetric key and session id
@@ -750,13 +782,14 @@ class NetworkInterface:
         session_data = {
             "pk": pk,
             "node_id": message.message["node_id"],
+            "node_type": message.message["node_type"],
             "last_active": mktime(datetime.datetime.now().timetuple()),
             "port": message.message["port"],
             "role": "server",   
             "counter": message.message["message"]["counter"],
             "session_id": session_id,
             "key": key,
-            "status": "active",
+            "status": "pending",
             "last_heartbeat": mktime(datetime.datetime.now().timetuple()),
             "approved": False
         }
@@ -794,23 +827,22 @@ class NetworkInterface:
         payload["hash"] = data_hash
         payload["signature"] = data_signature
         #send the message
-        try:
-            self.put_queue({"target": message.message["node_id"],
-                        "message": payload,
-                        "pos": self.pos},"outgoing")
-        except Exception as e:
-            print(e)
+        self.put_queue({"target": message.message["node_id"],
+                    "message": payload,
+                    "pos": self.pos},"outgoing")
             
     def approve_discovery_response(self,message):
         #approve discovery response and add node to the network
         #check if the node is already connected to the network
         if self.has_active_connection_session(message.message["node_id"]):
-            print("connection session is already active")
+            if self.DEBUG:
+                print("connection session is already active")
             return None
         #check if the node does not have active discovery session with the sender
         session = self.get_discovery_session(message.message["node_id"])
         if not session:
-            print("node does not have active discovery session with the sender")
+            if self.DEBUG:
+                print("node does not have active discovery session with the sender")
             return None
         #get the public key of the sender from the session
         pk = session["pk"]
@@ -822,26 +854,30 @@ class NetworkInterface:
         msg_data = json.dumps(buff)
         #decrypt the message
         try:
-            decrypted_data = self.decrypt(message.message["message"],self.sk)
+            decrypted_data = self.decrypt(message.message["message"])
             
         except Exception as e:
-            print(f"error decrypting and parsing data : {e}")
+            if self.DEBUG:
+                print(f"error decrypting and parsing data : {e}")
             return None
         #get hash and signature
         hash , signature = self.hash_and_sign(msg_data)
         #verify the message hash
         if hash != msg_hash:
-            print("hash not verified")
+            if self.DEBUG:
+                print("hash not verified")
             return None
         #verify the message signature
         if signature!=msg_signature:
-            print("signature not verified")
+            if self.DEBUG:
+                print("signature not verified")
             return None
         #parse the message
         decrypted_data = json.loads(decrypted_data)
         #check if the message counter is valid
         if decrypted_data["counter"] <= session["counter"]:
-            print("counter not valid")
+            if self.DEBUG:
+                print("counter not valid")
             return None
         
         #validate the message
@@ -849,27 +885,30 @@ class NetworkInterface:
         try :
             message=ApprovalMessage(message.message)
         except Exception as e:
-            print(f"error validating message : {e}")
+            if self.DEBUG:
+                print(f"error validating message : {e}")
             return None
         
-        
-        #decrypt the test message
-        try:
-            decrypted_test = self.decrypt_symmetric(decrypted_data["data"]["test_message"],session["key"])
-            if decrypted_test != "client_test":
-                print("test message not decrypted")
-                return None
-        except Exception as e:
-            print(f"error decrypting test message : {e}")
-            return None
         #first generate symmetric key
         key = decrypted_data["data"]["session_key"]
         #get the session id
         session_id = decrypted_data["data"]["session_id"]
+        #decrypt the test message
+        try:
+            decrypted_test = self.decrypt_symmetric(decrypted_data["data"]["test_message"],key)
+            if decrypted_test != "client_test":
+                if self.DEBUG:
+                    print("test message not decrypted")
+                return None
+        except Exception as e:
+            if self.DEBUG:
+                print(f"error decrypting test message : {e}")
+            return None
         #create new session
         session_data = {
             "pk": pk,
             "node_id": message.message["node_id"],
+            "node_type": message.message["node_type"],
             "last_active": mktime(datetime.datetime.now().timetuple()),
             "port": message.message["port"],
             "role": "server",   
@@ -911,19 +950,17 @@ class NetworkInterface:
         payload["hash"] = data_hash
         payload["signature"] = data_signature
         #send the message
-        try:
-            self.put_queue({"target": message.message["node_id"],
-                        "message": payload,
-                        "pos": self.pos},"outgoing")
-        except Exception as e:
-            print(e)
-    
+        self.put_queue({"target": message.message["node_id"],
+                    "message": payload,
+                    "pos": self.pos},"outgoing")
+
     def finalize_discovery(self,message):
         #approve discovery response and add node to the network
         #check if the node does not have active discovery session with the sender
         session = self.get_discovery_session(message.message["node_id"])
         if not session:
-            print("node does not have active discovery session with the sender")
+            if self.DEBUG:
+                print("node does not have active discovery session with the sender")
             return None
         #verify the message hash 
         buff = message.message
@@ -938,23 +975,27 @@ class NetworkInterface:
             decrypted_data = self.decrypt(message.message["message"],self.sk)
             
         except Exception as e:
-            print(f"error decrypting and parsing data : {e}")
+            if self.DEBUG:
+                print(f"error decrypting and parsing data : {e}")
             return None
         #get hash and signature
         hash , signature = self.hash_and_sign(msg_data)
         #verify the message hash
         if hash != msg_hash:
-            print("hash not verified")
+            if self.DEBUG:
+                print("hash not verified")
             return None
         #verify the message signature
         if signature!=msg_signature:
-            print("signature not verified")
+            if self.DEBUG:
+                print("signature not verified")
             return None
         #parse the message
         decrypted_data = json.loads(decrypted_data)
         #check if the message counter is valid
         if decrypted_data["counter"] <= session["counter"]:
-            print("counter not valid")
+            if self.DEBUG:
+                print("counter not valid")
             return None
         
         #validate the message
@@ -962,7 +1003,8 @@ class NetworkInterface:
         try :
             message=ApprovalResponseMessage(message.message)
         except Exception as e:
-            print(f"error validating message : {e}")
+            if self.DEBUG:
+                print(f"error validating message : {e}")
             return None
         
         
@@ -970,17 +1012,20 @@ class NetworkInterface:
         try:
             decrypted_test = self.decrypt_symmetric(decrypted_data["data"]["test_message"],session["key"])
             if decrypted_test != "server_test":
-                print("test message not decrypted")
+                if self.DEBUG:
+                    print("test message not decrypted")
                 return None
         except Exception as e:
-            print(f"error decrypting test message : {e}")
+            if self.DEBUG:
+                print(f"error decrypting test message : {e}")
             return None
         
         #get the session id
         session_id = decrypted_data["data"]["session_id"]
         #update the session
         session_data = {
-            "approved": True
+            "approved": True,
+            "status": "active",
         }
         self.update_connection_session(session_id,session_data)
         
@@ -1032,7 +1077,6 @@ class NetworkInterface:
         data["last_active"] = mktime(datetime.datetime.now().timetuple())
         self.discovery_sessions[node_id]= data
             
-    
     def update_discovery_session(self, node_id, data):
         #update session with the given public key and type
         for key,value in data.items():
@@ -1063,16 +1107,13 @@ class NetworkInterface:
             self.connection_sessions[session_id]["last_active"] = mktime(datetime.datetime.now().timetuple())
         return session
            
-        
     def generate_session_id(self):
         #generate session id, random string of 32 characters
         return ''.join(choices(ascii_uppercase + digits, k=32))
         
-        
     def create_connection_session(self, session_id, data):
         #create new session with the given public key and type
         self.connection_sessions[session_id]= data
-        
         
     def update_connection_session(self, session_id, data):
         #update session with the given public key and type
@@ -1091,12 +1132,13 @@ class NetworkInterface:
     ################################
     # queue management
     ################################
-    def put_queue(self, message,msg_type):
+    def put_queue(self, message,msg_type,on_failure=None):
         
         #add message to queue
         self.queue.put({
             "message": message,
-            "type": msg_type
+            "type": msg_type,
+            "on_failure": on_failure
         })
                  
     def pop_queue(self):
@@ -1128,10 +1170,11 @@ class NetworkInterface:
         #create heartbeat message
         payload = OrderedDict({
             "session_id": session["session_id"],
-            "node_id": session["node_id"],
-            "node_type": session["node_type"],
-            "port": session["port"],
+            "node_id": self.node_id,
+            "node_type": self.node_type,
+            "port": self.port,
             "type": "heartbeat",
+            "pos": self.pos,
             "message":encrypted_msg
             })
         #serialize message
@@ -1145,15 +1188,14 @@ class NetworkInterface:
         self.put_queue({"target": session["node_id"],
                         "message": payload,
                         "pos": self.pos},"outgoing")
-        
-        
-    
+           
     def handle_heartbeat(self,message):
         #receive heartbeat from node
         #get session
         session = self.get_connection_sessions(message.message["session_id"])
         if not session:
-            print("Invalid session")
+            if self.DEBUG:
+                print("Invalid session")
             return
         
         #get message hash and signature
@@ -1166,23 +1208,27 @@ class NetworkInterface:
         hash ,signature = self.hash_and_sign(msg_data)
         #verify message hash
         if hash != msg_hash:
-            print("Invalid hash")
+            if self.DEBUG:
+                print("Invalid hash")
             return
         #verify message signature
         if signature != msg_signature:
-            print("Invalid signature")
+            if self.DEBUG:
+                print("Invalid signature")
             return
         #decrypt message
         try:
             decrypted_msg = self.decrypt_symmetric(message.message["message"],session["key"])
         except:
-            print("Invalid key")
+            if self.DEBUG:
+                print("Invalid key")
             return
         #validate message
         message.message["message"] = json.loads(decrypted_msg)
         #check counter
         if message.message["message"]["counter"]<=session["counter"]:
-            print("Invalid counter")
+            if self.DEBUG:
+                print("Invalid counter")
             return
         #prepare message 
         msg_data = OrderedDict({
@@ -1197,10 +1243,11 @@ class NetworkInterface:
         #create heartbeat message
         payload = OrderedDict({
             "session_id": session["session_id"],
-            "node_id": session["node_id"],
-            "node_type": session["node_type"],
-            "port": session["port"],
+            "node_id": self.node_id,
+            "node_type":self.node_type,
+            "port": self.port,
             "type": "heartbeat_response",
+            "pos": self.pos,
             "message":encrypted_msg
             })
         #serialize message
@@ -1209,7 +1256,7 @@ class NetworkInterface:
         msg_hash,msg_signature = self.hash_and_sign(msg_data)
         #add hash and signature to message
         payload["hash"] = msg_hash
-        payload["signature"] = signature
+        payload["signature"] = msg_signature
         #send message
         self.put_queue({"target": session["node_id"],
                         "message": payload,
@@ -1220,33 +1267,41 @@ class NetworkInterface:
         #get session
         session = self.get_connection_sessions(message.message["session_id"])
         if not session:
+            if self.DEBUG:
+                print("Invalid session")
             return
         
         #get message hash and signature
         buff = message.message.copy()
         msg_hash = buff.pop("hash")
-        signature = buff.pop("signature")
+        msg_signature = buff.pop("signature")
         #serialize message buffer
         msg_data= json.dumps(buff)
+        #get message hash and signature
+        hash,signature = self.hash_and_sign(msg_data)
         #verify message hash and signature
-        if not self.verify(msg_data,signature,session["pk"]):
-            print("Invalid signature")
+        if hash != msg_hash:
+            if self.DEBUG:
+                print("Invalid hash")
             return
         #verify message hash
-        if not self.hash(msg_data)!=msg_hash:
-            print("Invalid hash")
+        if signature != msg_signature:
+            if self.DEBUG:
+                print("Invalid signature")
             return
         #decrypt message
         try:
             decrypted_msg = self.decrypt_symmetric(message.message["message"],session["key"])
         except:
-            print("Invalid key")
+            if self.DEBUG:
+                print("Invalid key")
             return
         #validate message
         message.message["message"] = json.loads(decrypted_msg)
         #check counter
-        if message.message["message"]["counter"]!=session["counter"]+1:
-            print("Invalid counter")
+        if message.message["message"]["counter"]<session["counter"]:
+            if self.DEBUG:
+                print("Invalid counter")
             return
         #update session
         self.update_connection_session(message.message["session_id"],{
@@ -1257,27 +1312,31 @@ class NetworkInterface:
         #get session
         session = self.get_connection_sessions(message.message["session_id"])
         if not session:
+            if self.DEBUG:
+                print("Invalid session")
             return
         
         #decrypt message
         try:
             decrypted_msg = self.decrypt_symmetric(message.message["message"],session["key"])
         except:
-            print("Invalid key")
+            if self.DEBUG:
+                print("Invalid key")
             return
         #validate message
         message.message["message"] = json.loads(decrypted_msg)
         #check counter
-        if message.message["message"]["counter"]!=session["counter"]+1:
-            print("Invalid counter")
+        if message.message["message"]["counter"]<session["counter"]:
+            if self.DEBUG:
+                print("Invalid counter")
             return
         #print message content 
-        print(f'{message.message["message"]["node_id"]} : {message.message["message"]["data"]["message"]}')
+        self.server.logger.warning(f'{message.message["node_id"]} : {message.message["message"]["data"]["message"]}')
 
 if __name__ == "__main__":
     #node = NetworkInterface("https://webhook.site/da3aee86-1fff-44c0-8f5f-5eeee42e5bc3",500,None)
     secret = "secret"
     auth = '1234567890'
     port = randint(5000,6000)
-    node = NetworkInterface("http://127.0.0.1:5000",port,None,secret,auth)
+    node = NetworkInterface("http://127.0.0.1:5000",port,None,secret,auth,True)
     node.start()

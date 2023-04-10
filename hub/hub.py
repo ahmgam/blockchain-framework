@@ -81,7 +81,7 @@ class Hub :
         target_id = data['target']
         message = data['message']
         pos = data["pos"]
-        self.app.logger.warning(f"Received message from {message['node_id']} to {target_id} with content {message['message']} and position {pos} at {datetime.datetime.now()}")
+        self.app.logger.warning(f"Received message from {message['node_id']} to {target_id} ")
         #check if the node is already registered
         node = self.get_node(message['node_id'])
         if not node:
@@ -108,11 +108,8 @@ class Hub :
                 return jsonify({'error': 'message received but not delivered'})
         else:
             #send the message to all nodes
-            print(" brodcasting message")
             self.brodcast_message(message,message['node_id'])
-            print(" brodcasted message")
             self.mark_message(msg)
-            print(" marked message")
             return jsonify({'success': 'message brodcasted'})
 
     @staticmethod
