@@ -5,14 +5,10 @@ import threading
 from time import sleep,mktime
 import uuid
 import datetime
-import rsa
-import os
 import queue
-from cryptography.fernet import Fernet
 from random import choices, randint
 from string import ascii_lowercase, digits, ascii_uppercase
-from base64 import  b64encode, b64decode
-from math import ceil
+from encryption import *
 
 class CommunicationModule:
     def __init__(self,endpoint,auth=None,timeout=5,DEBUG=False):
@@ -73,16 +69,18 @@ class NetworkInterface:
         #define heartbeat interval
         self.heartbeat_interval = 5
         #check if key pairs is available
-        self.pk, self.sk = self.load_keys()
+        self.pk, self.sk = EncryptionModule.load_keys('pk.pem', 'sk.pem')
         #if not, create new public and private key pair
         if self.pk == None:
-            self.pk, self.sk = self.generate_keys()
-            self.store_keys('pk.pem', 'sk.pem')
+            self.pk, self.sk = EncryptionModule.generate_keys()
+            EncryptionModule.store_keys('pk.pem', 'sk.pem',self.pk,self.sk)
         #define session manager
         self.discovery_sessions = {}
         self.connection_sessions = {}
         #define queue
         self.queue = queue.Queue()
+        #define output queue
+        self.output_queue = queue.Queue()
         #define listening flask
         self.server = Flask(__name__)
         #disable logging if not in debug mode
@@ -136,7 +134,7 @@ class NetworkInterface:
             #stringify message data
             msg_data = json.dumps(msg_data)
             #encrypt message data
-            encrypted_data = self.encrypt_symmetric(msg_data,session["key"])
+            encrypted_data = EncryptionModule.encrypt_symmetric(msg_data,session["key"])
             #prepare message payload
             msg_payload = OrderedDict({
                 "type": "data_exchange",
@@ -151,10 +149,9 @@ class NetworkInterface:
             #stringify message payload
             msg_payload_str = json.dumps(msg_payload)
             #hash and sign message payload
-            msg_hash,msg_signature = self.hash_and_sign(msg_payload_str)
+            msg_signature = EncryptionModule.sign(msg_payload_str,self.sk)
             #add signature and hash to message payload
             msg_payload["signature"] = msg_signature
-            msg_payload["hash"] = msg_hash
             #add message to the queue
             self.queue.put({"type":"outgoing","message":{
                 "target": session["node_id"],
@@ -268,129 +265,20 @@ class NetworkInterface:
                     #update last heartbeat time
                     self.connection_sessions[session_id]["last_heartbeat"] = mktime(datetime.datetime.now().timetuple())
                     sleep(1)
-        
+   
+   
     ################################
-    # key management
-    ################################    
-    def format_bytes(self,b):
-        return bytes(b64encode(b)).decode('utf-8')
-    
-    def generate_keys(self):
-        '''
-        generate new public and private key pair
-        '''
-        
-        #generate new public and private key pair
-        pk, sk=rsa.newkeys(2048)
-        return pk, sk
-    
-    def store_keys(self,public_key_file,private_key_file):
-        '''
-        store public and private key pair in file
-        '''
-        
-        #store public and private key pair in file
-        # Save the public key to a file
-        with open(public_key_file, 'wb') as f:
-            f.write(self.pk.save_pkcs1())
-
-        # Save the private key to a file
-        with open(private_key_file, 'wb') as f:
-            f.write(self.sk.save_pkcs1())
-        return None
-    
-    def load_keys(self):
-        '''
-        load public and private key pair from file
-        '''
-        #check if key pairs is available
-        if os.path.isfile('pk.pem') and os.path.isfile('sk.pem'):
-            #load public and private key pair from file
-            with open('pk.pem', 'rb') as f:
-                pk = rsa.PublicKey.load_pkcs1(f.read())
-            with open('sk.pem', 'rb') as f:
-                sk = rsa.PrivateKey.load_pkcs1(f.read())
-            return pk, sk
-        else:        
-            return None, None
-        
-    def sign(self,message):
-        if self.sk == None:
-            return None
-        else :
-            return rsa.sign(json.dumps(message).encode("utf-8"), self.sk, 'SHA-256')
-            #return self.sk.sign(json.dumps(message).encode("utf-8"))
-        
-    def verify(self,message,signature,pk):
-        #define public key instance from string
-        pk = rsa.PublicKey.load_pkcs1(pk)
-        #verify signature
-        return pk.verify(json.dumps(message).encode("utf-8"), signature)
-        
-    def hash(self,message):
-        return sha256(json.dumps(message).encode("utf-8")).hexdigest()
-    
-    def hash_and_sign(self,message):
-        hash = rsa.compute_hash(message.encode("latin-1"), 'SHA-1')
-        signature = rsa.sign_hash(hash, self.sk, 'SHA-1')
-        return self.format_bytes(hash) , self.format_bytes(signature)
-    
+    # Challenge management
+    ################################   
     def generate_challenge(self, length=20):
         return ''.join(choices(ascii_lowercase, k=length))
     
     def solve_challenge(self,challenge):
-        solution = self.hash(challenge+self.secret_key)
+        solution = EncryptionModule.hash(challenge)
         client_sol = solution[0:len(solution)//2]
         server_sol = solution[len(solution)//2:]
         return client_sol, server_sol
-    
-    def format_public_key(self,pk):
-        #remove new line characters
-        pk = str(pk.save_pkcs1().decode('ascii'))
-        pk = pk.replace('\n-----END RSA PUBLIC KEY-----\n', '').replace('-----BEGIN RSA PUBLIC KEY-----\n','')
-        return pk
-        
-    def reformat_public_key(self,pk):
-        return f"-----BEGIN RSA PUBLIC KEY-----\n{str(pk)}\n-----END RSA PUBLIC KEY-----\n"
-        
-    def generate_symmetric_key(self):
-        return Fernet.generate_key().decode("ascii")
-         
-    def encrypt(self, message, pk=None):
-        if pk == None:
-            pk = self.pk
-        if type(pk) == str:
-            pk = rsa.PublicKey.load_pkcs1(pk)
-        #encrypt message
-        result = []
-        for i in range (ceil(len(message)/245)):
-            start_index = i*245
-            end_index = (i+1)*245 if (i+1)*245 < len(message) else len(message)
-            result.append(rsa.encrypt(message[start_index:end_index].encode("ascii"), pk))   
-        return b64encode(b''.join(result)).decode('utf-8')
-    
-    def decrypt(self, message):
-        #decrypt message
-        message = b64decode(message.encode('utf-8'))
-        try:
-            result = []
-            for i in range (ceil(len(message)/256)):
-                start_index = i*256
-                end_index = (i+1)*256 if (i+1)*256 < len(message) else len(message)
-                result.append(rsa.decrypt(message[start_index:end_index], self.sk).decode("ascii"))   
-            return ''.join(result)
-        except Exception as e:
-            print(f"error decrypting message: {e}")
-            return None
-    
-    def encrypt_symmetric(self,message,key):
-        f = Fernet(key.encode("ascii"))
-        return b64encode(f.encrypt(message.encode("utf-8"))).decode('utf-8')
-    
-    def decrypt_symmetric(self,ciphertext,key):
-        f = Fernet(key.encode("ascii"))
-        return f.decrypt(b64decode(ciphertext.encode('utf-8'))).decode("ascii")
-    
+      
     ################################
     # discovery protocol
     ################################
@@ -409,16 +297,15 @@ class NetworkInterface:
             "timestamp": str(datetime.datetime.now()),
                 "counter": self.comm.counter,
                 "data":{
-                    "pk": self.format_public_key(self.pk),
+                    "pk": EncryptionModule.format_public_key(self.pk),
                     }
                 },
             })
         #stringify the data payload
         msg_data = json.dumps(payload,ensure_ascii=False)
         #generate hash and signature
-        msg_hash,msg_signature = self.hash_and_sign(msg_data)
+        msg_signature = EncryptionModule.sign(msg_data,self.sk)
         #add hash and signature to the payload
-        payload["hash"] = str(msg_hash)
         payload["signature"] = str(msg_signature)
         #create message object
         message = DiscoveryMessage(payload)
@@ -437,18 +324,12 @@ class NetworkInterface:
             return None
         #verify the message hash 
         buff = message.message
-        msg_hash = buff.pop('hash')
         msg_signature = buff.pop('signature')
-        msg_pk =self.reformat_public_key(buff["message"]["data"]["pk"])
+        msg_pk =buff["message"]["data"]["pk"]
         #stringify the data payload
         msg_data = json.dumps(buff)
-        hash,signature = self.hash_and_sign(msg_data)
-        if hash != msg_hash:
-            if self.DEBUG:
-                print("hash not verified")
-            return None
         #verify the message signature
-        if signature!=msg_signature:
+        if EncryptionModule.verify(msg_data, msg_signature, EncryptionModule.reformat_public_key(msg_pk)) == False:
             if self.DEBUG:
                 print("signature not verified")
             return None
@@ -465,7 +346,7 @@ class NetworkInterface:
         else:
             #create new session
             session_data = {
-                "pk": buff["message"]["data"]["pk"],
+                "pk": msg_pk,
                 "role":"server",
                 "counter": message.message["message"]["counter"],
                 "node_type": message.message["node_type"],     
@@ -476,14 +357,13 @@ class NetworkInterface:
                 "timestamp": str(datetime.datetime.now()),
                 "counter": self.comm.counter,
                 "data":{
-                    "pk": self.format_public_key(self.pk)
+                    "pk": EncryptionModule.format_public_key(self.pk)
                     }
                 })
         #stringify the message
         msg_data = json.dumps(msg_data)
-        
         #encrypt the message
-        data_encrypted = self.encrypt(msg_data,msg_pk)   
+        data_encrypted = EncryptionModule.encrypt(msg_data,EncryptionModule.reformat_public_key(msg_pk))   
         payload = {
             "node_id": self.node_id,
             "node_type": self.node_type,
@@ -496,9 +376,8 @@ class NetworkInterface:
         #stringify the message
         payload_data = json.dumps(payload)
         #get message hash,signature
-        data_hash,data_signature = self.hash_and_sign(payload_data)
+        data_signature = EncryptionModule.sign(payload_data,self.sk)
         #add hash and signature to the message
-        payload["hash"] = data_hash
         payload["signature"] = data_signature
         #send the message
         self.put_queue({"target": message.message["node_id"],
@@ -514,30 +393,17 @@ class NetworkInterface:
             return None
         #verify the message hash 
         buff = message.message
-        msg_hash = buff.pop('hash')
         msg_signature = buff.pop('signature')
         msg_data=json.dumps(buff)
-        #verify the message hash and signature
-        hash , signature = self.hash_and_sign(msg_data)
-        if hash != msg_hash:
-            if self.DEBUG:
-                print("hash not verified")
-            return None
-        #verify the message signature
-        if signature!=msg_signature:
-            if self.DEBUG:    
-                print("signature not verified")
-            return None
         #decrypt the message
         try:
-            decrypted_data = self.decrypt(message.message["message"])
-            
+            decrypted_data = EncryptionModule.decrypt(message.message["message"],self.sk)
+            #parse the message
+            decrypted_data = json.loads(decrypted_data)
         except Exception as e:
             if self.DEBUG:    
                 print(f"error decrypting and parsing data : {e}")
             return None
-        #parse the message
-        decrypted_data = json.loads(decrypted_data)
         #validate the message
         message.message["message"] = decrypted_data
         try :
@@ -546,10 +412,20 @@ class NetworkInterface:
             if self.DEBUG:
                 print(f"error validating message : {e}")
             return None
-        #generate challenge random string
-        challenge = self.generate_challenge()
-        #solve the challenge
-        client_sol, server_sol = self.solve_challenge(challenge)
+        #verify the message signature
+        if EncryptionModule.verify(msg_data, msg_signature, EncryptionModule.reformat_public_key(decrypted_data["data"]["pk"])) == False:
+            if self.DEBUG:    
+                print("signature not verified")
+            return None
+        try:
+            #generate challenge random string
+            challenge = self.generate_challenge()
+            #solve the challenge
+            client_sol, server_sol = self.solve_challenge(challenge)
+        except Exception as e:
+            if self.DEBUG:
+                print(f"error generating challenge : {e}")
+            return None
         #create discovery session
         session_data = {
             "pk": decrypted_data["data"]["pk"],
@@ -573,9 +449,8 @@ class NetworkInterface:
                 })
         #stringify the message
         msg_data = json.dumps(msg_data)
-        
         #encrypt the message
-        data_encrypted = self.encrypt(msg_data,self.reformat_public_key(decrypted_data["data"]["pk"]))
+        data_encrypted = EncryptionModule.encrypt(msg_data,EncryptionModule.reformat_public_key(decrypted_data["data"]["pk"]))
         payload = OrderedDict({
             "node_id": self.node_id,
             "node_type": self.node_type,
@@ -588,9 +463,8 @@ class NetworkInterface:
         #stringify the payload
         payload_data = json.dumps(payload)
         #get message hash and signature
-        data_hash,data_signature = self.hash_and_sign(payload_data)
+        data_signature = EncryptionModule.sign(payload_data,self.sk)
         #add hash and signature to the message
-        payload["hash"] = data_hash
         payload["signature"] = data_signature
         #send the message
         self.put_queue({"target": message.message["node_id"],
@@ -613,25 +487,19 @@ class NetworkInterface:
         
         #verify the message hash 
         buff = message.message
-        msg_hash = buff.pop('hash')
         msg_signature = buff.pop('signature')
         #verify the message hash
         msg_data = json.dumps(buff)
-        #verify the message hash and signature
-        hash , signature = self.hash_and_sign(msg_data)
-        if hash != msg_hash:
-            if self.DEBUG:
-                print("hash not verified")
-            return None
-        if signature!=msg_signature:
+        #get the public key of the sender from the session
+        pk = session["pk"]
+        #verify the message signature
+        if EncryptionModule.verify(msg_data, msg_signature, EncryptionModule.reformat_public_key(pk)) == False:
             if self.DEBUG:
                 print("signature not verified")
             return None
-        #get the public key of the sender from the session
-        pk = session["pk"]
         #decrypt the message
         try:
-            decrypted_data = self.decrypt(message.message["message"])
+            decrypted_data = EncryptionModule.decrypt(message.message["message"],self.sk)
             
         except Exception as e:
             if self.DEBUG:
@@ -685,10 +553,11 @@ class NetworkInterface:
                     "server_challenge_response": server_sol
                     }
                 })
+        
         #stringify the message
         msg_data = json.dumps(msg_data)
         #encrypt the message    
-        data_encrypted = self.encrypt(msg_data,self.reformat_public_key(pk))
+        data_encrypted = EncryptionModule.encrypt(msg_data,EncryptionModule.reformat_public_key(pk))
         payload = OrderedDict({
             "node_id": self.node_id,
             "node_type": self.node_type,
@@ -701,9 +570,8 @@ class NetworkInterface:
         #stringify the payload
         payload_data = json.dumps(payload)
         #get message hash and signature
-        data_hash,data_signature  = self.hash_and_sign(payload_data)
+        data_signature  = EncryptionModule.sign(payload_data,self.sk)
         #add hash and signature to the message
-        payload["hash"] = data_hash
         payload["signature"] = data_signature
         #send the message
         self.put_queue({"target": message.message["node_id"],
@@ -727,27 +595,19 @@ class NetworkInterface:
         pk = session["pk"]
         #verify the message hash 
         buff = message.message
-        msg_hash = buff.pop('hash')
         msg_signature = buff.pop('signature')
         #verify the message hash
         msg_data = json.dumps(buff)
         #decrypt the message
         try:
-            decrypted_data = self.decrypt(message.message["message"])
+            decrypted_data = EncryptionModule.decrypt(message.message["message"],self.sk)
             
         except Exception as e:
             if self.DEBUG:
                 print(f"error decrypting and parsing data : {e}")
             return None
-        #get hash and signature
-        hash , signature = self.hash_and_sign(msg_data)
-        #verify the message hash
-        if hash != msg_hash:
-            if self.DEBUG:
-                print("hash not verified")
-            return None
         #verify the message signature
-        if signature!=msg_signature:
+        if EncryptionModule.verify(msg_data, msg_signature, EncryptionModule.reformat_public_key(pk)) == False:
             if self.DEBUG:
                 print("signature not verified")
             return None
@@ -775,7 +635,7 @@ class NetworkInterface:
         
         #creating new session with symmetric key and session id
         #first generate symmetric key
-        key = self.generate_symmetric_key()
+        key = EncryptionModule.generate_symmetric_key()
         #get the session id
         session_id = self.generate_session_id()
         #create new session
@@ -801,15 +661,13 @@ class NetworkInterface:
                 "data":{
                     "session_id": session_id,
                     "session_key": key,
-                    "test_message": self.encrypt_symmetric("client_test",key)
+                    "test_message": EncryptionModule.encrypt_symmetric("client_test",key)
                     }
                 })
         #stringify the message
         msg_data = json.dumps(msg_data)
-        #get message hash and signature
-        data_hash,data_signature  = self.hash_and_sign(msg_data)
         #encrypt the message    
-        data_encrypted = self.encrypt(msg_data,self.reformat_public_key(pk))
+        data_encrypted = EncryptionModule.encrypt(msg_data,EncryptionModule.reformat_public_key(pk))
         payload = OrderedDict({
             "node_id": self.node_id,
             "node_type": self.node_type,
@@ -822,9 +680,8 @@ class NetworkInterface:
         #stringify the payload
         payload_data = json.dumps(payload)
         #get message hash 
-        data_hash,data_signature = self.hash_and_sign(payload_data)
+        data_signature = EncryptionModule.sign(payload_data, self.sk)
         #add hash and signature to the message
-        payload["hash"] = data_hash
         payload["signature"] = data_signature
         #send the message
         self.put_queue({"target": message.message["node_id"],
@@ -848,27 +705,19 @@ class NetworkInterface:
         pk = session["pk"]
         #verify the message hash 
         buff = message.message
-        msg_hash = buff.pop('hash')
         msg_signature = buff.pop('signature')
         #verify the message hash
         msg_data = json.dumps(buff)
         #decrypt the message
         try:
-            decrypted_data = self.decrypt(message.message["message"])
+            decrypted_data = EncryptionModule.decrypt(message.message["message"],self.sk)
             
         except Exception as e:
             if self.DEBUG:
                 print(f"error decrypting and parsing data : {e}")
             return None
-        #get hash and signature
-        hash , signature = self.hash_and_sign(msg_data)
-        #verify the message hash
-        if hash != msg_hash:
-            if self.DEBUG:
-                print("hash not verified")
-            return None
         #verify the message signature
-        if signature!=msg_signature:
+        if EncryptionModule.verify(msg_data, msg_signature, EncryptionModule.reformat_public_key(pk)) == False:
             if self.DEBUG:
                 print("signature not verified")
             return None
@@ -895,7 +744,7 @@ class NetworkInterface:
         session_id = decrypted_data["data"]["session_id"]
         #decrypt the test message
         try:
-            decrypted_test = self.decrypt_symmetric(decrypted_data["data"]["test_message"],key)
+            decrypted_test = EncryptionModule.decrypt_symmetric(decrypted_data["data"]["test_message"],key)
             if decrypted_test != "client_test":
                 if self.DEBUG:
                     print("test message not decrypted")
@@ -926,13 +775,13 @@ class NetworkInterface:
                 "counter": self.comm.counter,
                 "data":{
                     "session_id": session_id,
-                    "test_message": self.encrypt_symmetric("server_test",key)
+                    "test_message": EncryptionModule.encrypt_symmetric("server_test",key)
                     }
                 })
         #stringify the message
         msg_data = json.dumps(msg_data)
         #encrypt the message    
-        data_encrypted = self.encrypt(msg_data,self.reformat_public_key(pk))
+        data_encrypted = EncryptionModule.encrypt(msg_data,EncryptionModule.reformat_public_key(pk))
         payload = OrderedDict({
             "node_id": self.node_id,
             "node_type": self.node_type,
@@ -945,9 +794,8 @@ class NetworkInterface:
         #stringify the payload
         payload_data = json.dumps(payload)
         #get message hash and signature
-        data_hash,data_signature = self.hash_and_sign(payload_data)
+        data_signature = EncryptionModule.sign(payload_data, self.sk)
         #add hash and signature to the message
-        payload["hash"] = data_hash
         payload["signature"] = data_signature
         #send the message
         self.put_queue({"target": message.message["node_id"],
@@ -964,7 +812,6 @@ class NetworkInterface:
             return None
         #verify the message hash 
         buff = message.message
-        msg_hash = buff.pop('hash')
         msg_signature = buff.pop('signature')
         #verify the message hash
         msg_data = json.dumps(buff)
@@ -972,21 +819,14 @@ class NetworkInterface:
         pk = session["pk"]
         #decrypt the message
         try:
-            decrypted_data = self.decrypt(message.message["message"],self.sk)
+            decrypted_data = EncryptionModule.decrypt(message.message["message"],self.sk)
             
         except Exception as e:
             if self.DEBUG:
                 print(f"error decrypting and parsing data : {e}")
             return None
-        #get hash and signature
-        hash , signature = self.hash_and_sign(msg_data)
-        #verify the message hash
-        if hash != msg_hash:
-            if self.DEBUG:
-                print("hash not verified")
-            return None
         #verify the message signature
-        if signature!=msg_signature:
+        if EncryptionModule.verify(msg_data, msg_signature, EncryptionModule.reformat_public_key(pk)) == False:
             if self.DEBUG:
                 print("signature not verified")
             return None
@@ -1010,7 +850,7 @@ class NetworkInterface:
         
         #decrypt the test message
         try:
-            decrypted_test = self.decrypt_symmetric(decrypted_data["data"]["test_message"],session["key"])
+            decrypted_test = EncryptionModule.decrypt_symmetric(decrypted_data["data"]["test_message"],session["key"])
             if decrypted_test != "server_test":
                 if self.DEBUG:
                     print("test message not decrypted")
@@ -1150,6 +990,23 @@ class NetworkInterface:
             self.queue.task_done()
             return data
     
+    def put_output_queue(self, message,msg_source,msg_type):
+        
+        #add message to queue
+        self.output_queue.put({
+            "message": message,
+            "source": msg_source,
+            "type": msg_type,
+            "timestamp": mktime(datetime.datetime.now().timetuple())
+        })
+    def pop_output_queue(self):
+        #get message from send queue
+        if self.output_queue.empty():
+            return None
+        else:
+            data = self.output_queue.get()
+            self.output_queue.task_done()
+            return data    
     ################################
     # Heartbeat management
     ################################
@@ -1166,7 +1023,7 @@ class NetworkInterface:
         #serialize message
         msg_data= json.dumps(msg_data)
         #encrypt message
-        encrypted_msg = self.encrypt_symmetric(msg_data,session["key"])
+        encrypted_msg = EncryptionModule.encrypt_symmetric(msg_data,session["key"])
         #create heartbeat message
         payload = OrderedDict({
             "session_id": session["session_id"],
@@ -1180,9 +1037,8 @@ class NetworkInterface:
         #serialize message
         msg_data= json.dumps(payload)
         #get message hash and signature
-        msg_hash,msg_signature = self.hash_and_sign(msg_data)
+        msg_signature = EncryptionModule.sign(msg_data,self.sk)
         #add hash and signature to message
-        payload["hash"] = msg_hash
         payload["signature"] = msg_signature
         #send message
         self.put_queue({"target": session["node_id"],
@@ -1200,25 +1056,17 @@ class NetworkInterface:
         
         #get message hash and signature
         buff = message.message.copy()
-        msg_hash = buff.pop("hash")
         msg_signature = buff.pop("signature")
         #serialize message buffer
         msg_data= json.dumps(buff)
-        #verify message hash and signature
-        hash ,signature = self.hash_and_sign(msg_data)
-        #verify message hash
-        if hash != msg_hash:
-            if self.DEBUG:
-                print("Invalid hash")
-            return
         #verify message signature
-        if signature != msg_signature:
+        if EncryptionModule.verify(msg_data, msg_signature, EncryptionModule.reformat_public_key(session["pk"])) == False:
             if self.DEBUG:
                 print("Invalid signature")
             return
         #decrypt message
         try:
-            decrypted_msg = self.decrypt_symmetric(message.message["message"],session["key"])
+            decrypted_msg = EncryptionModule.decrypt_symmetric(message.message["message"],session["key"])
         except:
             if self.DEBUG:
                 print("Invalid key")
@@ -1239,7 +1087,7 @@ class NetworkInterface:
         #serialize message
         msg_data= json.dumps(msg_data)
         #encrypt message
-        encrypted_msg = self.encrypt_symmetric(msg_data,session["key"])
+        encrypted_msg = EncryptionModule.encrypt_symmetric(msg_data,session["key"])
         #create heartbeat message
         payload = OrderedDict({
             "session_id": session["session_id"],
@@ -1253,9 +1101,8 @@ class NetworkInterface:
         #serialize message
         msg_data= json.dumps(payload)
         #get message hash and signature
-        msg_hash,msg_signature = self.hash_and_sign(msg_data)
+        msg_signature = EncryptionModule.sign(msg_data,self.sk)
         #add hash and signature to message
-        payload["hash"] = msg_hash
         payload["signature"] = msg_signature
         #send message
         self.put_queue({"target": session["node_id"],
@@ -1273,25 +1120,17 @@ class NetworkInterface:
         
         #get message hash and signature
         buff = message.message.copy()
-        msg_hash = buff.pop("hash")
         msg_signature = buff.pop("signature")
         #serialize message buffer
         msg_data= json.dumps(buff)
-        #get message hash and signature
-        hash,signature = self.hash_and_sign(msg_data)
-        #verify message hash and signature
-        if hash != msg_hash:
-            if self.DEBUG:
-                print("Invalid hash")
-            return
-        #verify message hash
-        if signature != msg_signature:
+        #verify message signature
+        if EncryptionModule.verify(msg_data, msg_signature, EncryptionModule.reformat_public_key(session["pk"])) == False:
             if self.DEBUG:
                 print("Invalid signature")
             return
         #decrypt message
         try:
-            decrypted_msg = self.decrypt_symmetric(message.message["message"],session["key"])
+            decrypted_msg = EncryptionModule.decrypt_symmetric(message.message["message"],session["key"])
         except:
             if self.DEBUG:
                 print("Invalid key")
@@ -1318,7 +1157,7 @@ class NetworkInterface:
         
         #decrypt message
         try:
-            decrypted_msg = self.decrypt_symmetric(message.message["message"],session["key"])
+            decrypted_msg = EncryptionModule.decrypt_symmetric(message.message["message"],session["key"])
         except:
             if self.DEBUG:
                 print("Invalid key")
@@ -1330,8 +1169,18 @@ class NetworkInterface:
             if self.DEBUG:
                 print("Invalid counter")
             return
-        #print message content 
-        self.server.logger.warning(f'{message.message["node_id"]} : {message.message["message"]["data"]["message"]}')
+        message_type = "str"
+        if type(message.message["message"]["data"]["message"]) == dict:
+            message_data= json.dumps(message.message["message"]["data"]["message"])
+            message_type = "dict"
+        else:
+            message_data = message.message["message"]["data"]["message"]
+            message_type = "str"
+        #print message content
+        if self.DEBUG:
+            self.server.logger.warning(f'{message.message["node_id"]} : {message_data}')
+        #add message to output queue
+        self.put_output_queue(message_data,message.message["node_id"],message_type)
 
 if __name__ == "__main__":
     #node = NetworkInterface("https://webhook.site/da3aee86-1fff-44c0-8f5f-5eeee42e5bc3",500,None)
@@ -1340,3 +1189,8 @@ if __name__ == "__main__":
     port = randint(5000,6000)
     node = NetworkInterface("http://127.0.0.1:5000",port,None,secret,auth,True)
     node.start()
+    while True:
+        #get message from output queue
+        message = node.pop_output_queue()
+        if message:
+            print(f"Message from {message['node_id']} : {message['message']}")
