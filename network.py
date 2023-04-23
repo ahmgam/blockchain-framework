@@ -1,115 +1,31 @@
 import requests
 from flask import Flask, Response,request
 from messages import *
-import threading
-from time import sleep,mktime
-import uuid
 import datetime
-import queue
-from random import choices, randint
-from string import ascii_lowercase, digits, ascii_uppercase
-from encryption import *
-
-class CommunicationModule:
-    def __init__(self,endpoint,auth=None,timeout=5,DEBUG=False):
-        self.endpoint = endpoint
-        self.auth = auth
-        self.timeout = timeout
-        self.counter = 0
-        self.DEBUG = DEBUG
-    def send(self, message):
-        if self.DEBUG:
-            print(f'{datetime.datetime.now()} : Sending message to {message["target"]} with type {message["message"]["type"]} and content {message["message"]["hash"]}')
-        headers = {'Content-Type': 'application/json'}
-        if self.auth != None:
-            headers['Authorization'] = self.auth
-        try:
-            req =   requests.post(self.endpoint+'/',
-                                json = message,
-                                headers = headers,timeout=self.timeout)
-        except Exception as e:
-            if self.DEBUG:
-                print(f"Error sending message: {e}")
-            return False
-        if req.status_code == 200:
-            self.counter += 1
-            return True
-        else :
-            if self.DEBUG:
-                print(f"Error sending message: {req.status_code}")
-            return False
-    
-            
-            
+from encryption import EncryptionModule
+     
 class NetworkInterface:
     
-    def __init__(self,endpoint,port,parent,secret_key,auth=None,DEBUG=False):
+    def __init__(self,parent):
         '''
         Initialize network interface
         '''
-        self.DEBUG = DEBUG
-        #define secret 
-        self.secret_key = secret_key
-        #define dummy position
-        self.pos = "0,0,0"
-        #define node id
-        self.node_id = uuid.uuid4().hex
-        #define node type
-        self.node_type = "uav"
         #define parent
         self.parent = parent
-        #get port from parent
-        self.endpoint = endpoint
-        #define communication module
-        self.comm = CommunicationModule(self.endpoint,auth)
-        #define port
-        self.port = port
         #define discovery interval
         self.discovery_interval = 10
         #define heartbeat interval
         self.heartbeat_interval = 5
-        #check if key pairs is available
-        self.pk, self.sk = EncryptionModule.load_keys('pk.pem', 'sk.pem')
-        #if not, create new public and private key pair
-        if self.pk == None:
-            self.pk, self.sk = EncryptionModule.generate_keys()
-            EncryptionModule.store_keys('pk.pem', 'sk.pem',self.pk,self.sk)
-        #define session manager
-        self.discovery_sessions = {}
-        self.connection_sessions = {}
-        #define queue
-        self.queue = queue.Queue()
-        #define output queue
-        self.output_queue = queue.Queue()
         #define listening flask
         self.server = Flask(__name__)
         #disable logging if not in debug mode
-        if not self.DEBUG:
+        if not self.parent.DEBUG:
             self.server.logger.disabled = True
         self.server.add_url_rule('/', 'listen',lambda : self.listen(self), methods=['POST'])
         #add message send endpoint
         self.server.add_url_rule('/send', 'send',lambda : self.send(self), methods=['POST'])
         #self.server.add_url_rule('/', 'listen',self.listen, methods=['POST'])
-
-        #define heartbeat thread
-        self.heartbeat_thread = threading.Thread(target=self.heartbeat)
-        self.heartbeat_thread.daemon = True
-        
-        #define discovery thread
-        self.discovery_thread = threading.Thread(target= self.discovery, args=(self.comm,))
-        #self.discovery_thread = threading.Thread(target=lambda: self.discovery(self))
-        self.discovery_thread.daemon = True
-        #define handler thread
-        self.handler_thread = threading.Thread(target=self.handle)
-        self.handler_thread.daemon = True
-        
-    def start(self):
-        self.heartbeat_thread.start()
-        self.discovery_thread.start()
-        self.handler_thread.start()
-        #start flask server
-        self.server.run( port=self.port)
-        
+   
     @staticmethod 
     def send(self):
         '''
@@ -120,13 +36,13 @@ class NetworkInterface:
         node_id = data["node_id"]
         message = data["message"]
         #check if session is available
-        if self.has_active_connection_session(node_id):
+        if self.parent.sessions.has_active_connection_session(node_id):
             #get session
-            session = self.get_connection_session_by_node_id(node_id)
+            session = self.parent.sessions.get_connection_session_by_node_id(node_id)
             #prepare message data
             msg_data = OrderedDict({
             "timestamp": str(datetime.datetime.now()),
-                "counter": self.comm.counter,
+                "counter": self.parent.comm.counter,
                 "data":{
                     "message": message
                     }
@@ -138,1018 +54,40 @@ class NetworkInterface:
             #prepare message payload
             msg_payload = OrderedDict({
                 "type": "data_exchange",
-                "node_id": self.node_id,
-                "node_type": self.node_type,
+                "node_id": self.parent.node_id,
+                "node_type": self.parent.node_type,
                 "data": msg_data,
-                "pos": self.pos,
-                "port": self.port,
+                "pos": self.parent.pos,
+                "port": self.parent.port,
                 "session_id": session["session_id"],
                 "message": encrypted_data
                 })
             #stringify message payload
             msg_payload_str = json.dumps(msg_payload)
             #hash and sign message payload
-            msg_signature = EncryptionModule.sign(msg_payload_str,self.sk)
+            msg_signature = EncryptionModule.sign(msg_payload_str,self.parent.sk)
             #add signature and hash to message payload
             msg_payload["signature"] = msg_signature
             #add message to the queue
-            self.queue.put({"type":"outgoing","message":{
+            self.parent.queues.put_queue({
                 "target": session["node_id"],
                 "message": msg_payload,
-                "pos": self.pos,
-            }},"outgoing")
+                "pos": self.parent.pos,
+            },"outgoing")
             return Response("OK", status=200)
+    
     @staticmethod
     def listen(self):
         '''
         receive message from the network
         '''
         #receive message from the network and put it in the queue
-        self.queue.put({"type":"incoming","message":request.json })
+        self.parent.queues.put_queue(request.json,"incoming")
         return Response("OK", status=200)
-        
-    def handle(self):
-        '''
-        start listening for incoming connections
-        '''
-        while True:
-            #get message from queue
-            try:
-                message_buffer = self.pop_queue()
-                
-                if message_buffer:
-                    #check message type
-                    if str(message_buffer["type"]) == "incoming":
-                        message =Message(message_buffer["message"]) 
-                        if message.message["node_id"]==self.node_id:
-                            continue
-                        
-                        if message.message["type"] == "discovery":
-                            if self.DEBUG:
-                                print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting response_to_discovery")
-                            self.respond_to_discovery(message)
-                        elif message.message["type"] == "discovery_response":
-                            if self.DEBUG:
-                                print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting verify_discovery")
-                            self.verify_discovery(message)
-                        elif message.message["type"] == "discovery_verification":
-                            if self.DEBUG:
-                                print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting verify_discovery_response")
-                            self.verify_discovery_response(message)
-                        elif message.message["type"] == "discovery_verification_response":
-                            if self.DEBUG:
-                                print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting approve_discovery")
-                            self.approve_discovery(message)
-                        elif message.message["type"] == "discovery_approval":
-                            if self.DEBUG:
-                                print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting approve_discovery_response")
-                            self.approve_discovery_response(message)
-                        elif message.message["type"] == "discovery_approval_response":
-                            if self.DEBUG:
-                                print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting finalize_discovery")
-                            self.finalize_discovery(message)
-                        elif message.message["type"] == "heartbeat":
-                            if self.DEBUG:
-                                print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting handle_heartbeat")
-                            self.handle_heartbeat(message)
-                        elif message.message["type"] == "heartbeat_response":
-                            if self.DEBUG:
-                                print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting handle_heartbeat_response")
-                            self.handle_heartbeat_response(message)
-                        elif message.message["type"] == "data_exchange":
-                            if self.DEBUG:
-                                print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting handle_data")
-                            self.handle_data(message)
-                        else:
-                            if self.DEBUG:
-                                print(f"unknown message type {message.message['type']}")
-                    elif str(message_buffer["type"]) == "outgoing":
-                        
-                        try:
-                            self.comm.send(message_buffer["message"])
-                        except Exception as e:
-                            if self.DEBUG:
-                                print(e)
-                    else:
-                        if self.DEBUG:
-                            print(f'unknown message type {message_buffer["type"]}')
-            except Exception as e:
-                if self.DEBUG:
-                    print(f"error in handling message: {e}")
-                continue
-           
-        #listen for incoming connections
-        
-    def discovery(self,comm):
-        '''
-        publish message to the network
-        '''
-        #broadcast message to the network
-        while True:
-            sleep(self.discovery_interval)
-            self.discover()
-            
-    def heartbeat(self):
-        '''
-        send heartbeat to all nodes
-        '''
-        pass
-        #send heartbeat to all nodes
-        while True:
-            for session_id, session in self.connection_sessions.items():
-                #check if time interval is passed
-                session_time = mktime(datetime.datetime.now().timetuple()) - session["last_heartbeat"]
-                if session_time > self.heartbeat_interval and session["status"] == "active":
-                    #send heartbeat
-                    self.send_heartbeat(session)
-                    #update last heartbeat time
-                    self.connection_sessions[session_id]["last_heartbeat"] = mktime(datetime.datetime.now().timetuple())
-                    sleep(1)
-   
-   
-    ################################
-    # Challenge management
-    ################################   
-    def generate_challenge(self, length=20):
-        return ''.join(choices(ascii_lowercase, k=length))
-    
-    def solve_challenge(self,challenge):
-        solution = EncryptionModule.hash(challenge)
-        client_sol = solution[0:len(solution)//2]
-        server_sol = solution[len(solution)//2:]
-        return client_sol, server_sol
-      
-    ################################
-    # discovery protocol
-    ################################
-    def discover(self):
-        #discover new nodes on the networن       
-        #define message payload
-        
-        payload = OrderedDict({
-            "node_id": self.node_id,
-            "node_type": self.node_type,
-            "pos": self.pos,
-            "type": "discovery",
-            "port": self.port,
-            "session_id": "",
-            "message":{
-            "timestamp": str(datetime.datetime.now()),
-                "counter": self.comm.counter,
-                "data":{
-                    "pk": EncryptionModule.format_public_key(self.pk),
-                    }
-                },
-            })
-        #stringify the data payload
-        msg_data = json.dumps(payload,ensure_ascii=False)
-        #generate hash and signature
-        msg_signature = EncryptionModule.sign(msg_data,self.sk)
-        #add hash and signature to the payload
-        payload["signature"] = str(msg_signature)
-        #create message object
-        message = DiscoveryMessage(payload)
-        self.put_queue({"target": "all",
-                "message": message.message,
-                "pos": self.pos}, "outgoing")
-        
-    def respond_to_discovery(self,message):
-        #respond to discovery requests and send challenge
-        #first verify the message
-        try:
-            message = DiscoveryMessage(message.message) 
-        except Exception as e:
-            if self.DEBUG:
-                print(f"validation error {e}")
-            return None
-        #verify the message hash 
-        buff = message.message
-        msg_signature = buff.pop('signature')
-        msg_pk =buff["message"]["data"]["pk"]
-        #stringify the data payload
-        msg_data = json.dumps(buff)
-        #verify the message signature
-        if EncryptionModule.verify(msg_data, msg_signature, EncryptionModule.reformat_public_key(msg_pk)) == False:
-            if self.DEBUG:
-                print("signature not verified")
-            return None
-        #check if the node is already connected to the network
-        if self.has_active_connection_session(message.message["node_id"]):
-            if self.DEBUG:
-                print("connection session is already active") 
-            return None
-        #check if the node has active discovery session with the sender
-        if self.get_discovery_session(message.message["node_id"]):
-            if self.DEBUG:    
-                print("discovery session is already active")
-            return None
-        else:
-            #create new session
-            session_data = {
-                "pk": msg_pk,
-                "role":"server",
-                "counter": message.message["message"]["counter"],
-                "node_type": message.message["node_type"],     
-            }
-            self.create_discovery_session(message.message["node_id"],session_data)
-        #prepare discovery response message
-        msg_data =OrderedDict( {
-                "timestamp": str(datetime.datetime.now()),
-                "counter": self.comm.counter,
-                "data":{
-                    "pk": EncryptionModule.format_public_key(self.pk)
-                    }
-                })
-        #stringify the message
-        msg_data = json.dumps(msg_data)
-        #encrypt the message
-        data_encrypted = EncryptionModule.encrypt(msg_data,EncryptionModule.reformat_public_key(msg_pk))   
-        payload = {
-            "node_id": self.node_id,
-            "node_type": self.node_type,
-            "pos": self.pos,
-            "type": "discovery_response",
-            "port": self.port,
-            "session_id": "",
-            "message": data_encrypted
-            }
-        #stringify the message
-        payload_data = json.dumps(payload)
-        #get message hash,signature
-        data_signature = EncryptionModule.sign(payload_data,self.sk)
-        #add hash and signature to the message
-        payload["signature"] = data_signature
-        #send the message
-        self.put_queue({"target": message.message["node_id"],
-                    "message": payload,
-                    "pos": self.pos}, "outgoing")
-    
-    def verify_discovery(self,message):
-        #verify discovery request and send challenge response
-        #check if the node is already connected to the network
-        if self.has_active_connection_session(message.message["node_id"]):
-            if self.DEBUG:    
-                print("connection session is already active")
-            return None
-        #verify the message hash 
-        buff = message.message
-        msg_signature = buff.pop('signature')
-        msg_data=json.dumps(buff)
-        #decrypt the message
-        try:
-            decrypted_data = EncryptionModule.decrypt(message.message["message"],self.sk)
-            #parse the message
-            decrypted_data = json.loads(decrypted_data)
-        except Exception as e:
-            if self.DEBUG:    
-                print(f"error decrypting and parsing data : {e}")
-            return None
-        #validate the message
-        message.message["message"] = decrypted_data
-        try :
-            message=DiscoveryResponseMessage(message.message)
-        except Exception as e:
-            if self.DEBUG:
-                print(f"error validating message : {e}")
-            return None
-        #verify the message signature
-        if EncryptionModule.verify(msg_data, msg_signature, EncryptionModule.reformat_public_key(decrypted_data["data"]["pk"])) == False:
-            if self.DEBUG:    
-                print("signature not verified")
-            return None
-        try:
-            #generate challenge random string
-            challenge = self.generate_challenge()
-            #solve the challenge
-            client_sol, server_sol = self.solve_challenge(challenge)
-        except Exception as e:
-            if self.DEBUG:
-                print(f"error generating challenge : {e}")
-            return None
-        #create discovery session
-        session_data = {
-            "pk": decrypted_data["data"]["pk"],
-            "role": "client",
-            "counter": message.message["message"]["counter"],
-            "node_type": message.message["node_type"],
-            "challenge": challenge,
-            "client_challenge_response": client_sol,
-            "server_challenge_response": server_sol
-        }
-        #create discovery session
-        self.create_discovery_session(message.message["node_id"],session_data)
-        #prepare verification message 
-        msg_data = OrderedDict({
-                "timestamp": str(datetime.datetime.now()),
-                "counter": self.comm.counter,
-                "data":{
-                    "challenge": challenge,
-                    "client_challenge_response": client_sol
-                    }
-                })
-        #stringify the message
-        msg_data = json.dumps(msg_data)
-        #encrypt the message
-        data_encrypted = EncryptionModule.encrypt(msg_data,EncryptionModule.reformat_public_key(decrypted_data["data"]["pk"]))
-        payload = OrderedDict({
-            "node_id": self.node_id,
-            "node_type": self.node_type,
-            "pos": self.pos,
-            "type": "discovery_verification",
-            "port": self.port,
-            "session_id": "",
-            "message": data_encrypted
-            })
-        #stringify the payload
-        payload_data = json.dumps(payload)
-        #get message hash and signature
-        data_signature = EncryptionModule.sign(payload_data,self.sk)
-        #add hash and signature to the message
-        payload["signature"] = data_signature
-        #send the message
-        self.put_queue({"target": message.message["node_id"],
-                    "message": payload,
-                    "pos": self.pos},"outgoing")
- 
-    def verify_discovery_response(self,message):
-        #verify discovery response and add node to the network
-        #check if the node is already connected to the network
-        if self.has_active_connection_session(message.message["node_id"]):
-            if self.DEBUG:
-                print("connection session is already active")
-            return None
-        #check if the node does not have active discovery session with the sender
-        session = self.get_discovery_session(message.message["node_id"])
-        if not session:
-            if self.DEBUG:
-                print("node does not have active discovery session with the sender")
-            return None
-        
-        #verify the message hash 
-        buff = message.message
-        msg_signature = buff.pop('signature')
-        #verify the message hash
-        msg_data = json.dumps(buff)
-        #get the public key of the sender from the session
-        pk = session["pk"]
-        #verify the message signature
-        if EncryptionModule.verify(msg_data, msg_signature, EncryptionModule.reformat_public_key(pk)) == False:
-            if self.DEBUG:
-                print("signature not verified")
-            return None
-        #decrypt the message
-        try:
-            decrypted_data = EncryptionModule.decrypt(message.message["message"],self.sk)
-            
-        except Exception as e:
-            if self.DEBUG:
-                print(f"error decrypting and parsing data : {e}")
-            return None
-        
-        #parse the message
-        decrypted_data = json.loads(decrypted_data)
-        #check if the message counter is valid
-        if decrypted_data["counter"] <= session["counter"]:
-            if self.DEBUG:
-                print("counter not valid")
-            return None
-        
-        #validate the message
-        message.message["message"] = decrypted_data
-        try :
-            message=VerificationMessage(message.message)
-        except Exception as e:
-            if self.DEBUG:
-                print(f"error validating message : {e}")
-            return None
-        
-        #get the challenge from the incoming message
-        challenge = decrypted_data["data"]["challenge"]
-        #solve the challenge
-        client_sol, server_sol = self.solve_challenge(challenge)
-        #compare the client challenge response
-        if decrypted_data["data"]["client_challenge_response"] != client_sol:
-            if self.DEBUG:
-                print("client challenge response not verified")
-            return None
-        #update discovery session
-        session_data = {
-            "pk": pk,
-            "role": "server",
-            "counter": message.message["message"]["counter"],
-            "node_type": message.message["node_type"],
-            "challenge": challenge,
-            "client_challenge_response": client_sol,
-            "server_challenge_response": server_sol
-        }
-        #update discovery session
-        self.update_discovery_session(message.message["node_id"],session_data)
-        #prepare verification message
-        msg_data = OrderedDict({
-                "timestamp": str(datetime.datetime.now()),
-                "counter": self.comm.counter,
-                "data":{
-                    "challenge": challenge,
-                    "server_challenge_response": server_sol
-                    }
-                })
-        
-        #stringify the message
-        msg_data = json.dumps(msg_data)
-        #encrypt the message    
-        data_encrypted = EncryptionModule.encrypt(msg_data,EncryptionModule.reformat_public_key(pk))
-        payload = OrderedDict({
-            "node_id": self.node_id,
-            "node_type": self.node_type,
-            "pos": self.pos,
-            "type": "discovery_verification_response",
-            "port": self.port,
-            "session_id": "",
-            "message": data_encrypted
-            })
-        #stringify the payload
-        payload_data = json.dumps(payload)
-        #get message hash and signature
-        data_signature  = EncryptionModule.sign(payload_data,self.sk)
-        #add hash and signature to the message
-        payload["signature"] = data_signature
-        #send the message
-        self.put_queue({"target": message.message["node_id"],
-                    "message": payload,
-                    "pos": self.pos},"outgoing")
-
-    def approve_discovery(self,message):
-        #approve discovery request and send approval response
-        #check if the node is already connected to the network
-        if self.has_active_connection_session(message.message["node_id"]):
-            if self.DEBUG:
-                print("connection session is already active")
-            return None
-        #check if the node does not have active discovery session with the sender
-        session = self.get_discovery_session(message.message["node_id"])
-        if not session:
-            if self.DEBUG:
-                print("node does not have active discovery session with the sender")
-            return None
-        #get the public key of the sender from the session
-        pk = session["pk"]
-        #verify the message hash 
-        buff = message.message
-        msg_signature = buff.pop('signature')
-        #verify the message hash
-        msg_data = json.dumps(buff)
-        #decrypt the message
-        try:
-            decrypted_data = EncryptionModule.decrypt(message.message["message"],self.sk)
-            
-        except Exception as e:
-            if self.DEBUG:
-                print(f"error decrypting and parsing data : {e}")
-            return None
-        #verify the message signature
-        if EncryptionModule.verify(msg_data, msg_signature, EncryptionModule.reformat_public_key(pk)) == False:
-            if self.DEBUG:
-                print("signature not verified")
-            return None
-        #parse the message
-        decrypted_data = json.loads(decrypted_data)
-        #check if the message counter is valid
-        if decrypted_data["counter"] <= session["counter"]:
-            if self.DEBUG:
-                print("counter not valid")
-            return None
-        
-        #validate the message
-        message.message["message"] = decrypted_data
-        try :
-            message=VerificationResponseMessage(message.message)
-        except Exception as e:
-            if self.DEBUG:
-                print(f"error validating message : {e}")
-            return None
-        #compare the client challenge response
-        if decrypted_data["data"]["server_challenge_response"] != session["server_challenge_response"]:
-            if self.DEBUG:
-                print("client challenge response not verified")
-            return None
-        
-        #creating new session with symmetric key and session id
-        #first generate symmetric key
-        key = EncryptionModule.generate_symmetric_key()
-        #get the session id
-        session_id = self.generate_session_id()
-        #create new session
-        session_data = {
-            "pk": pk,
-            "node_id": message.message["node_id"],
-            "node_type": message.message["node_type"],
-            "last_active": mktime(datetime.datetime.now().timetuple()),
-            "port": message.message["port"],
-            "role": "server",   
-            "counter": message.message["message"]["counter"],
-            "session_id": session_id,
-            "key": key,
-            "status": "pending",
-            "last_heartbeat": mktime(datetime.datetime.now().timetuple()),
-            "approved": False
-        }
-        self.create_connection_session(session_id,session_data)
-        #prepare approval message
-        msg_data = OrderedDict({
-                "timestamp": str(datetime.datetime.now()),
-                "counter": self.comm.counter,
-                "data":{
-                    "session_id": session_id,
-                    "session_key": key,
-                    "test_message": EncryptionModule.encrypt_symmetric("client_test",key)
-                    }
-                })
-        #stringify the message
-        msg_data = json.dumps(msg_data)
-        #encrypt the message    
-        data_encrypted = EncryptionModule.encrypt(msg_data,EncryptionModule.reformat_public_key(pk))
-        payload = OrderedDict({
-            "node_id": self.node_id,
-            "node_type": self.node_type,
-            "pos": self.pos,
-            "type": "discovery_approval",
-            "port": self.port,
-            "session_id": "",
-            "message": data_encrypted
-            })
-        #stringify the payload
-        payload_data = json.dumps(payload)
-        #get message hash 
-        data_signature = EncryptionModule.sign(payload_data, self.sk)
-        #add hash and signature to the message
-        payload["signature"] = data_signature
-        #send the message
-        self.put_queue({"target": message.message["node_id"],
-                    "message": payload,
-                    "pos": self.pos},"outgoing")
-            
-    def approve_discovery_response(self,message):
-        #approve discovery response and add node to the network
-        #check if the node is already connected to the network
-        if self.has_active_connection_session(message.message["node_id"]):
-            if self.DEBUG:
-                print("connection session is already active")
-            return None
-        #check if the node does not have active discovery session with the sender
-        session = self.get_discovery_session(message.message["node_id"])
-        if not session:
-            if self.DEBUG:
-                print("node does not have active discovery session with the sender")
-            return None
-        #get the public key of the sender from the session
-        pk = session["pk"]
-        #verify the message hash 
-        buff = message.message
-        msg_signature = buff.pop('signature')
-        #verify the message hash
-        msg_data = json.dumps(buff)
-        #decrypt the message
-        try:
-            decrypted_data = EncryptionModule.decrypt(message.message["message"],self.sk)
-            
-        except Exception as e:
-            if self.DEBUG:
-                print(f"error decrypting and parsing data : {e}")
-            return None
-        #verify the message signature
-        if EncryptionModule.verify(msg_data, msg_signature, EncryptionModule.reformat_public_key(pk)) == False:
-            if self.DEBUG:
-                print("signature not verified")
-            return None
-        #parse the message
-        decrypted_data = json.loads(decrypted_data)
-        #check if the message counter is valid
-        if decrypted_data["counter"] <= session["counter"]:
-            if self.DEBUG:
-                print("counter not valid")
-            return None
-        
-        #validate the message
-        message.message["message"] = decrypted_data
-        try :
-            message=ApprovalMessage(message.message)
-        except Exception as e:
-            if self.DEBUG:
-                print(f"error validating message : {e}")
-            return None
-        
-        #first generate symmetric key
-        key = decrypted_data["data"]["session_key"]
-        #get the session id
-        session_id = decrypted_data["data"]["session_id"]
-        #decrypt the test message
-        try:
-            decrypted_test = EncryptionModule.decrypt_symmetric(decrypted_data["data"]["test_message"],key)
-            if decrypted_test != "client_test":
-                if self.DEBUG:
-                    print("test message not decrypted")
-                return None
-        except Exception as e:
-            if self.DEBUG:
-                print(f"error decrypting test message : {e}")
-            return None
-        #create new session
-        session_data = {
-            "pk": pk,
-            "node_id": message.message["node_id"],
-            "node_type": message.message["node_type"],
-            "last_active": mktime(datetime.datetime.now().timetuple()),
-            "port": message.message["port"],
-            "role": "server",   
-            "counter": message.message["message"]["counter"],
-            "session_id": session_id,
-            "key": key,
-            "status": "active",
-            "last_heartbeat": mktime(datetime.datetime.now().timetuple()),
-            "approved": True
-        }
-        self.create_connection_session(session_id,session_data)
-        #prepare approval message
-        msg_data = OrderedDict({
-                "timestamp": str(datetime.datetime.now()),
-                "counter": self.comm.counter,
-                "data":{
-                    "session_id": session_id,
-                    "test_message": EncryptionModule.encrypt_symmetric("server_test",key)
-                    }
-                })
-        #stringify the message
-        msg_data = json.dumps(msg_data)
-        #encrypt the message    
-        data_encrypted = EncryptionModule.encrypt(msg_data,EncryptionModule.reformat_public_key(pk))
-        payload = OrderedDict({
-            "node_id": self.node_id,
-            "node_type": self.node_type,
-            "pos": self.pos,
-            "type": "discovery_approval",
-            "port": self.port,
-            "session_id": "",
-            "message": data_encrypted
-            })
-        #stringify the payload
-        payload_data = json.dumps(payload)
-        #get message hash and signature
-        data_signature = EncryptionModule.sign(payload_data, self.sk)
-        #add hash and signature to the message
-        payload["signature"] = data_signature
-        #send the message
-        self.put_queue({"target": message.message["node_id"],
-                    "message": payload,
-                    "pos": self.pos},"outgoing")
-
-    def finalize_discovery(self,message):
-        #approve discovery response and add node to the network
-        #check if the node does not have active discovery session with the sender
-        session = self.get_discovery_session(message.message["node_id"])
-        if not session:
-            if self.DEBUG:
-                print("node does not have active discovery session with the sender")
-            return None
-        #verify the message hash 
-        buff = message.message
-        msg_signature = buff.pop('signature')
-        #verify the message hash
-        msg_data = json.dumps(buff)
-        #get the public key of the sender from the session
-        pk = session["pk"]
-        #decrypt the message
-        try:
-            decrypted_data = EncryptionModule.decrypt(message.message["message"],self.sk)
-            
-        except Exception as e:
-            if self.DEBUG:
-                print(f"error decrypting and parsing data : {e}")
-            return None
-        #verify the message signature
-        if EncryptionModule.verify(msg_data, msg_signature, EncryptionModule.reformat_public_key(pk)) == False:
-            if self.DEBUG:
-                print("signature not verified")
-            return None
-        #parse the message
-        decrypted_data = json.loads(decrypted_data)
-        #check if the message counter is valid
-        if decrypted_data["counter"] <= session["counter"]:
-            if self.DEBUG:
-                print("counter not valid")
-            return None
-        
-        #validate the message
-        message.message["message"] = decrypted_data
-        try :
-            message=ApprovalResponseMessage(message.message)
-        except Exception as e:
-            if self.DEBUG:
-                print(f"error validating message : {e}")
-            return None
-        
-        
-        #decrypt the test message
-        try:
-            decrypted_test = EncryptionModule.decrypt_symmetric(decrypted_data["data"]["test_message"],session["key"])
-            if decrypted_test != "server_test":
-                if self.DEBUG:
-                    print("test message not decrypted")
-                return None
-        except Exception as e:
-            if self.DEBUG:
-                print(f"error decrypting test message : {e}")
-            return None
-        
-        #get the session id
-        session_id = decrypted_data["data"]["session_id"]
-        #update the session
-        session_data = {
-            "approved": True,
-            "status": "active",
-        }
-        self.update_connection_session(session_id,session_data)
-        
- 
-    ################################
-    # session management
-    ################################      
-    '''
-    discovery session shape :
-    {
-        {
-          "node_id": node_id,
-            "node_type": node_type,
-            "pk": public_key,
-            "counter": counter
-            "timestamp": timestamp
-            "status": status
-            "role": role
-            "challenge": challenge
-            "client_challenge_response": client_challenge_response
-            "server_challenge_response": server_challenge_response
-            "session_id": session_id  
-        }
-        
-    }
-    connection session shape :
-    {
-        {
-          "node_id": node_id,
-            "node_type": node_type,
-            "pk": public_key,
-            "counter": counter
-            "timestamp": timestamp
-            "status": status
-            "role": role
-            "challenge": challenge
-            "client_challenge_response": client_challenge_response
-            "server_challenge_response": server_challenge_response
-            "session_id": session_id  
-        }
-        
-    }
-    ''' 
-    def create_discovery_session(self, node_id, data):
-        
-        #create new session with the given public key and type
-        data["node_id"] = node_id
-        #add last call timestamp
-        data["last_active"] = mktime(datetime.datetime.now().timetuple())
-        self.discovery_sessions[node_id]= data
-            
-    def update_discovery_session(self, node_id, data):
-        #update session with the given public key and type
-        for key,value in data.items():
-            self.discovery_sessions[node_id][key] = value
-        #update last call timestamp
-        self.discovery_sessions[node_id]["last_active"] = mktime(datetime.datetime.now().timetuple())
-        
-    def get_discovery_session(self, node_id):
-        #get all discovery sessions
-        session = self.discovery_sessions.get(node_id,None)
-        if session:
-            #update last call timestamp
-            self.discovery_sessions[node_id]["last_active"] = mktime(datetime.datetime.now().timetuple()) 
-        return session
-    
-    def has_active_connection_session(self, node_id):
-        #check if session with the given public key is active
-        for key,value in self.connection_sessions.items():
-            if value["node_id"] == node_id:
-                return True
-        return False
-    
-    def get_connection_sessions(self,session_id):
-        #get connection sessions
-        session= self.connection_sessions.get(session_id,None)
-        if session:
-            #update last call timestamp
-            self.connection_sessions[session_id]["last_active"] = mktime(datetime.datetime.now().timetuple())
-        return session
-           
-    def generate_session_id(self):
-        #generate session id, random string of 32 characters
-        return ''.join(choices(ascii_uppercase + digits, k=32))
-        
-    def create_connection_session(self, session_id, data):
-        #create new session with the given public key and type
-        self.connection_sessions[session_id]= data
-        
-    def update_connection_session(self, session_id, data):
-        #update session with the given public key and type
-        for key,value in data.items():
-            self.connection_sessions[session_id][key] = value
-        #update last call timestamp
-        self.connection_sessions[session_id]["last_active"] = mktime(datetime.datetime.now().timetuple())
-    
-    def get_connection_session_by_node_id(self, node_id):
-        #get connection session by node id
-        for key,value in self.connection_sessions.items():
-            if value["node_id"] == node_id:
-                return value
-        return None
-        
-    ################################
-    # queue management
-    ################################
-    def put_queue(self, message,msg_type,on_failure=None):
-        
-        #add message to queue
-        self.queue.put({
-            "message": message,
-            "type": msg_type,
-            "on_failure": on_failure
-        })
-                 
-    def pop_queue(self):
-        #get message from send queue
-        if self.queue.empty():
-            return None
-        else:
-            data = self.queue.get()
-            self.queue.task_done()
-            return data
-    
-    def put_output_queue(self, message,msg_source,msg_type):
-        
-        #add message to queue
-        self.output_queue.put({
-            "message": message,
-            "source": msg_source,
-            "type": msg_type,
-            "timestamp": mktime(datetime.datetime.now().timetuple())
-        })
-    def pop_output_queue(self):
-        #get message from send queue
-        if self.output_queue.empty():
-            return None
-        else:
-            data = self.output_queue.get()
-            self.output_queue.task_done()
-            return data    
-    ################################
-    # Heartbeat management
-    ################################
-    
-    def send_heartbeat(self,session):
-        
-        #send heartbeat to session
-        #prepare message 
-        msg_data = OrderedDict({
-                "timestamp": str(datetime.datetime.now()),
-                "counter": session["counter"]+1,
-                "data":None
-            })
-        #serialize message
-        msg_data= json.dumps(msg_data)
-        #encrypt message
-        encrypted_msg = EncryptionModule.encrypt_symmetric(msg_data,session["key"])
-        #create heartbeat message
-        payload = OrderedDict({
-            "session_id": session["session_id"],
-            "node_id": self.node_id,
-            "node_type": self.node_type,
-            "port": self.port,
-            "type": "heartbeat",
-            "pos": self.pos,
-            "message":encrypted_msg
-            })
-        #serialize message
-        msg_data= json.dumps(payload)
-        #get message hash and signature
-        msg_signature = EncryptionModule.sign(msg_data,self.sk)
-        #add hash and signature to message
-        payload["signature"] = msg_signature
-        #send message
-        self.put_queue({"target": session["node_id"],
-                        "message": payload,
-                        "pos": self.pos},"outgoing")
-           
-    def handle_heartbeat(self,message):
-        #receive heartbeat from node
-        #get session
-        session = self.get_connection_sessions(message.message["session_id"])
-        if not session:
-            if self.DEBUG:
-                print("Invalid session")
-            return
-        
-        #get message hash and signature
-        buff = message.message.copy()
-        msg_signature = buff.pop("signature")
-        #serialize message buffer
-        msg_data= json.dumps(buff)
-        #verify message signature
-        if EncryptionModule.verify(msg_data, msg_signature, EncryptionModule.reformat_public_key(session["pk"])) == False:
-            if self.DEBUG:
-                print("Invalid signature")
-            return
-        #decrypt message
-        try:
-            decrypted_msg = EncryptionModule.decrypt_symmetric(message.message["message"],session["key"])
-        except:
-            if self.DEBUG:
-                print("Invalid key")
-            return
-        #validate message
-        message.message["message"] = json.loads(decrypted_msg)
-        #check counter
-        if message.message["message"]["counter"]<=session["counter"]:
-            if self.DEBUG:
-                print("Invalid counter")
-            return
-        #prepare message 
-        msg_data = OrderedDict({
-                "timestamp": str(datetime.datetime.now()),
-                "counter": session["counter"]+1,
-                "data":None
-            })
-        #serialize message
-        msg_data= json.dumps(msg_data)
-        #encrypt message
-        encrypted_msg = EncryptionModule.encrypt_symmetric(msg_data,session["key"])
-        #create heartbeat message
-        payload = OrderedDict({
-            "session_id": session["session_id"],
-            "node_id": self.node_id,
-            "node_type":self.node_type,
-            "port": self.port,
-            "type": "heartbeat_response",
-            "pos": self.pos,
-            "message":encrypted_msg
-            })
-        #serialize message
-        msg_data= json.dumps(payload)
-        #get message hash and signature
-        msg_signature = EncryptionModule.sign(msg_data,self.sk)
-        #add hash and signature to message
-        payload["signature"] = msg_signature
-        #send message
-        self.put_queue({"target": session["node_id"],
-                        "message": payload,
-                        "pos": self.pos},"outgoing")
- 
-    def handle_heartbeat_response(self,message):
-        #receive heartbeat from node
-        #get session
-        session = self.get_connection_sessions(message.message["session_id"])
-        if not session:
-            if self.DEBUG:
-                print("Invalid session")
-            return
-        
-        #get message hash and signature
-        buff = message.message.copy()
-        msg_signature = buff.pop("signature")
-        #serialize message buffer
-        msg_data= json.dumps(buff)
-        #verify message signature
-        if EncryptionModule.verify(msg_data, msg_signature, EncryptionModule.reformat_public_key(session["pk"])) == False:
-            if self.DEBUG:
-                print("Invalid signature")
-            return
-        #decrypt message
-        try:
-            decrypted_msg = EncryptionModule.decrypt_symmetric(message.message["message"],session["key"])
-        except:
-            if self.DEBUG:
-                print("Invalid key")
-            return
-        #validate message
-        message.message["message"] = json.loads(decrypted_msg)
-        #check counter
-        if message.message["message"]["counter"]<session["counter"]:
-            if self.DEBUG:
-                print("Invalid counter")
-            return
-        #update session
-        self.update_connection_session(message.message["session_id"],{
-            "counter":message.message["message"]["counter"],
-            "last_active": mktime(datetime.datetime.now().timetuple())})       
-        
+  
     def handle_data(self,message):
         #get session
-        session = self.get_connection_sessions(message.message["session_id"])
+        session = self.parent.sessions.get_connection_sessions(message.message["session_id"])
         if not session:
             if self.DEBUG:
                 print("Invalid session")
@@ -1159,14 +97,14 @@ class NetworkInterface:
         try:
             decrypted_msg = EncryptionModule.decrypt_symmetric(message.message["message"],session["key"])
         except:
-            if self.DEBUG:
+            if self.parent.DEBUG:
                 print("Invalid key")
             return
         #validate message
         message.message["message"] = json.loads(decrypted_msg)
         #check counter
         if message.message["message"]["counter"]<session["counter"]:
-            if self.DEBUG:
+            if self.parent.DEBUG:
                 print("Invalid counter")
             return
         message_type = "str"
@@ -1177,10 +115,13 @@ class NetworkInterface:
             message_data = message.message["message"]["data"]["message"]
             message_type = "str"
         #print message content
-        if self.DEBUG:
-            self.server.logger.warning(f'{message.message["node_id"]} : {message_data}')
+        #if self.parent.DEBUG:
+        #    self.server.logger.warning(f'{message.message["node_id"]} : {message_data}')
         #add message to output queue
-        self.put_output_queue(message_data,message.message["node_id"],message_type)
+        self.parent.queues.put_output_queue(message_data,message.message["node_id"],message_type)
+      
+    '''
+    
 
 if __name__ == "__main__":
     #node = NetworkInterface("https://webhook.site/da3aee86-1fff-44c0-8f5f-5eeee42e5bc3",500,None)
@@ -1194,3 +135,5 @@ if __name__ == "__main__":
         message = node.pop_output_queue()
         if message:
             print(f"Message from {message['node_id']} : {message['message']}")
+
+    '''

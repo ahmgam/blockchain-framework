@@ -1,39 +1,28 @@
-from .authentication import Authentication,Peer
-import uuid
-class Connector:
-    
-    def __init__(self):
-        '''
-        initialize the connector
-        '''
-        self.peer_list = []
-        #initialize the authenticator
-        self.authenticator = Authentication(self.peer_list)
-        #generate session key
-        self.session_key = self.generateSessionKey()
-        #generate public key
-        self.public_key = self.authenticator.generate_public_key()
-        
-    def addPeer(self, peerInfo):
-        '''
-        add a peer to the peer list
-        @param peerInfo: the peer information
-        '''
+import datetime
+import requests
+class CommunicationModule:
+    def __init__(self,parent):
+        self.parent = parent
+        self.counter = 0
+        self.timeout = 5
+    def send(self, message):
+        if self.parent.DEBUG:
+            print(f'{datetime.datetime.now()} : Sending message to {message["target"]} with type {message["message"]["type"]}')
+        headers = {'Content-Type': 'application/json'}
+        if self.parent.auth != None:
+            headers['Authorization'] = self.parent.auth
         try:
-            self.peer_list.append(Peer(peerInfo))
-        except:
-            raise Exception('peer information is not valid')
-        
-    def generateSessionKey(self):
-        '''
-        generate the session key
-        '''
-        #generate session key as random string
-        return str(uuid.uuid4())
-    
-    def generatePublicKey(self):
-        '''
-        generate the public key
-        '''
-        
-        return 
+            req =   requests.post(self.parent.endpoint+'/',
+                                json = message,
+                                headers = headers,timeout=self.timeout)
+        except Exception as e:
+            if self.parent.DEBUG:
+                print(f"Error sending message: {e}")
+            return False
+        if req.status_code == 200:
+            self.counter += 1
+            return True
+        else :
+            if self.parent.DEBUG:
+                print(f"Error sending message: {req.status_code}")
+            return False

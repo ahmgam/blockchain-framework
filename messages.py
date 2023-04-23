@@ -185,8 +185,6 @@ class Message :
         if "required_fields" in kwargs:
             self.__check_required_fields(kwargs["required_fields"],data)
         
-        if "generate_hash" in kwargs:
-            self.message["hash"] = self.get_hash()
             
     def __check_required_fields(self,required_fields,data):
         if not isinstance(required_fields,list):
@@ -217,15 +215,6 @@ class Message :
     
     def to_json(self):
         return json.dumps(self.message)
-        
-    def get_hash(self):
-        #get hash of the message sha256
-        if "hash" in self.message.keys():
-            del self.message["hash"]
-        if "signature" in self.message.keys():
-            del self.message["signature"]
-            
-        return sha256(json.dumps(self.message).encode("utf-8")).hexdigest()
         
     def sign(self, private_key):
         #sign the message
