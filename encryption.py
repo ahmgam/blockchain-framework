@@ -4,6 +4,7 @@ from cryptography.fernet import Fernet
 from base64 import  b64encode, b64decode
 import json
 from math import ceil
+import time
 
 class EncryptionModule:
     
@@ -54,14 +55,29 @@ class EncryptionModule:
         '''
         hash message using SHA-256
         '''
-        return bytes(b64encode(rsa.compute_hash(message.encode('utf-8'), 'SHA-256'))).decode('utf-8')
+        if type(message) == dict:
+          message = json.dumps(message)
+        return b64encode(rsa.compute_hash(message.encode('utf-8'), 'SHA-256')).decode('ascii')
+
+    @staticmethod
+    def sign_hash(message,sk):
+      #define private key instance from string
+        if type(sk) == str:
+            sk = rsa.PrivateKey.load_pkcs1(sk)
+        message = b64decode(message.encode('ascii'))
+        signature = rsa.sign_hash(message, sk, 'SHA-256')
+        return b64encode(signature).decode('ascii')
+
+
     @staticmethod
     def sign(message,sk):
         #define private key instance from string
         if type(sk) == str:
             sk = rsa.PrivateKey.load_pkcs1(sk)
-        signature = rsa.sign(json.dumps(message).encode("latin-1"), sk, 'SHA-256')
-        return bytes(b64encode(signature)).decode('utf-8')
+        if type(message) == dict:
+            message = json.dumps(message)
+        signature = rsa.sign(message.encode("utf-8"), sk, 'SHA-256')
+        return b64encode(signature).decode('ascii')
         
     @staticmethod
     def verify(message,signature,pk):
@@ -70,7 +86,7 @@ class EncryptionModule:
             pk = rsa.PublicKey.load_pkcs1(pk)
         #verify signature
         try : 
-          if rsa.verify(json.dumps(message).encode("utf-8"), b64decode(signature.encode('utf-8')), pk):
+          if rsa.verify(json.dumps(message).encode("utf-8"), b64decode(signature.encode('ascii')), pk):
             return True
         except:
           return False
@@ -126,4 +142,3 @@ class EncryptionModule:
     def decrypt_symmetric(ciphertext,key):
         f = Fernet(key.encode("ascii"))
         return f.decrypt(b64decode(ciphertext.encode('utf-8'))).decode("ascii")
-    

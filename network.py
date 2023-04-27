@@ -37,7 +37,8 @@ class NetworkInterface:
         #payload 
         payload = {
             "operation":"pre-prepare",
-            "message":message
+            "message":message,
+            "source":self.parent.node_id
         }
         #send_message
         self.parent.consensus.send(payload)
@@ -74,17 +75,7 @@ class NetworkInterface:
             if self.parent.DEBUG:
                 print("Invalid counter")
             return
-        #check signature
-        msg_signature = message.message["message"]["data"].pop('signature')
-        #stringify the data payload
-        msg_data = json.dumps(message.message["message"]["data"])
-        #verify the message signature
-        if EncryptionModule.verify(msg_data, msg_signature, EncryptionModule.reformat_public_key(session["pk"])) == False:
-            if self.parent.DEBUG:
-                print("signature not verified")
-            return None
-        #re-add signature to message
-        message.message["message"]["data"]["signature"] = msg_signature
+        
         return message.message
 
     def send_message(self, target, message):
@@ -92,10 +83,15 @@ class NetworkInterface:
         #define target sessions
         if target == "all":
             node_ids = self.parent.sessions.get_active_nodes()
-        else :
+        elif type(target) == list:
+            node_ids = target
+        else:
             node_ids = [target]
         #iterate over target sessions
         for node_id in node_ids:
+            #check if node_id is local node_id 
+            if node_id == self.parent.node_id:
+                continue
             #check if session is available
             if not self.parent.sessions.has_active_connection_session(node_id):
                 if self.parent.DEBUG:
@@ -103,11 +99,6 @@ class NetworkInterface:
                 return Response("No active session", status=400)
             #get session
             session = self.parent.sessions.get_connection_session_by_node_id(node_id)
-            #sign message
-            msg = json.dumps(message)
-            msg_signature = EncryptionModule.sign(msg,self.parent.sk)
-            #add signature to message
-            message["signature"] = msg_signature
             #prepare message data
             msg_data = OrderedDict({
             "timestamp": str(datetime.datetime.now()),
