@@ -69,3 +69,5 @@ class SessionManager:
                 return value
         return None
         
+    def get_active_nodes(self):
+        return [session["node_id"] for session in self.connection_sessions.values() if session["last_active"] > mktime(datetime.datetime.now().timetuple())-60]

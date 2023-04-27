@@ -8,6 +8,7 @@ from heartbeat import HeartbeatProtocol
 from discovery import DiscoveryProtocol
 from threading import Thread
 from messages import *
+from consensus import SBFT
 import uuid
 from random import randint
 class Silsila:
@@ -48,6 +49,8 @@ class Silsila:
         self.heartbeat = HeartbeatProtocol(self)
         #define discovery protocol
         self.discovery = DiscoveryProtocol(self)
+        #define consensus protocol
+        self.consensus = SBFT(self)
         #define listening flask
         self.server = Flask(__name__)
         #define heartbeat thread
@@ -88,11 +91,12 @@ class Silsila:
                             self.discovery.handle(message)
                         elif message.message["type"].startswith("heartbeat"):
                             self.heartbeat.handle(message)
-                        #elif message.message["type"].startswith("consensus"):
-                        #    self.consensus.handle(message)
                         elif message.message["type"]=="data_exchange":
                             #for test purposes
-                            self.network.handle_data(message)
+                            data = self.network.verify_data(message)
+                            if data:
+                                self.network.server.logger.warning(f"Message from {data['node_id']} : {data['message']}")
+                                #self.consensus.handle(data)
                         else:
                             if self.DEBUG:
                                 print(f"unknown message type {message.message['type']}")
@@ -118,9 +122,5 @@ if __name__ == "__main__":
     node_type = "uav"
     node = Silsila(node_id,node_type,"http://127.0.0.1:5000",port,secret,auth,True)
     node.start()
-    while True:
-        #get message from output queue
-        message = node.queues.pop_output_queue()
-        if message:
-            node.network.server.logger.warning(f"Message from {message['source']} : {message['message']}")
+    
             

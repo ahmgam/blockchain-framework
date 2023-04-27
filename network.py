@@ -33,19 +33,86 @@ class NetworkInterface:
         '''
         #get data 
         data = request.json
-        node_id = data["node_id"]
         message = data["message"]
-        #check if session is available
-        if self.parent.sessions.has_active_connection_session(node_id):
+        #payload 
+        payload = {
+            "operation":"pre-prepare",
+            "message":message
+        }
+        #send_message
+        self.parent.consensus.send(payload)
+        return Response("OK", status=200)
+    
+    @staticmethod
+    def listen(self):
+        '''
+        receive message from the network
+        '''
+        #receive message from the network and put it in the queue
+        self.parent.queues.put_queue(request.json,"incoming")
+        return Response("OK", status=200)
+  
+    def verify_data(self,message):
+        #get session
+        session = self.parent.sessions.get_connection_sessions(message.message["session_id"])
+        if not session:
+            if self.DEBUG:
+                print("Invalid session")
+            return
+
+        #decrypt message
+        try:
+            decrypted_msg = EncryptionModule.decrypt_symmetric(message.message["message"],session["key"])
+        except:
+            if self.parent.DEBUG:
+                print("Invalid key")
+            return
+        #validate message
+        message.message["message"] = json.loads(decrypted_msg)
+        #check counter
+        if message.message["message"]["counter"]<session["counter"]:
+            if self.parent.DEBUG:
+                print("Invalid counter")
+            return
+        #check signature
+        msg_signature = message.message["message"]["data"].pop('signature')
+        #stringify the data payload
+        msg_data = json.dumps(message.message["message"]["data"])
+        #verify the message signature
+        if EncryptionModule.verify(msg_data, msg_signature, EncryptionModule.reformat_public_key(session["pk"])) == False:
+            if self.parent.DEBUG:
+                print("signature not verified")
+            return None
+        #re-add signature to message
+        message.message["message"]["data"]["signature"] = msg_signature
+        return message.message
+
+    def send_message(self, target, message):
+        
+        #define target sessions
+        if target == "all":
+            node_ids = self.parent.sessions.get_active_nodes()
+        else :
+            node_ids = [target]
+        #iterate over target sessions
+        for node_id in node_ids:
+            #check if session is available
+            if not self.parent.sessions.has_active_connection_session(node_id):
+                if self.parent.DEBUG:
+                    print("No active session")
+                return Response("No active session", status=400)
             #get session
             session = self.parent.sessions.get_connection_session_by_node_id(node_id)
+            #sign message
+            msg = json.dumps(message)
+            msg_signature = EncryptionModule.sign(msg,self.parent.sk)
+            #add signature to message
+            message["signature"] = msg_signature
             #prepare message data
             msg_data = OrderedDict({
             "timestamp": str(datetime.datetime.now()),
                 "counter": self.parent.comm.counter,
-                "data":{
-                    "message": message
-                    }
+                "data":message
                 })
             #stringify message data
             msg_data = json.dumps(msg_data)
@@ -62,78 +129,9 @@ class NetworkInterface:
                 "session_id": session["session_id"],
                 "message": encrypted_data
                 })
-            #stringify message payload
-            msg_payload_str = json.dumps(msg_payload)
-            #hash and sign message payload
-            msg_signature = EncryptionModule.sign(msg_payload_str,self.parent.sk)
-            #add signature and hash to message payload
-            msg_payload["signature"] = msg_signature
             #add message to the queue
             self.parent.queues.put_queue({
                 "target": session["node_id"],
                 "message": msg_payload,
                 "pos": self.parent.pos,
             },"outgoing")
-            return Response("OK", status=200)
-    
-    @staticmethod
-    def listen(self):
-        '''
-        receive message from the network
-        '''
-        #receive message from the network and put it in the queue
-        self.parent.queues.put_queue(request.json,"incoming")
-        return Response("OK", status=200)
-  
-    def handle_data(self,message):
-        #get session
-        session = self.parent.sessions.get_connection_sessions(message.message["session_id"])
-        if not session:
-            if self.DEBUG:
-                print("Invalid session")
-            return
-        
-        #decrypt message
-        try:
-            decrypted_msg = EncryptionModule.decrypt_symmetric(message.message["message"],session["key"])
-        except:
-            if self.parent.DEBUG:
-                print("Invalid key")
-            return
-        #validate message
-        message.message["message"] = json.loads(decrypted_msg)
-        #check counter
-        if message.message["message"]["counter"]<session["counter"]:
-            if self.parent.DEBUG:
-                print("Invalid counter")
-            return
-        message_type = "str"
-        if type(message.message["message"]["data"]["message"]) == dict:
-            message_data= json.dumps(message.message["message"]["data"]["message"])
-            message_type = "dict"
-        else:
-            message_data = message.message["message"]["data"]["message"]
-            message_type = "str"
-        #print message content
-        #if self.parent.DEBUG:
-        #    self.server.logger.warning(f'{message.message["node_id"]} : {message_data}')
-        #add message to output queue
-        self.parent.queues.put_output_queue(message_data,message.message["node_id"],message_type)
-      
-    '''
-    
-
-if __name__ == "__main__":
-    #node = NetworkInterface("https://webhook.site/da3aee86-1fff-44c0-8f5f-5eeee42e5bc3",500,None)
-    secret = "secret"
-    auth = '1234567890'
-    port = randint(5000,6000)
-    node = NetworkInterface("http://127.0.0.1:5000",port,None,secret,auth,True)
-    node.start()
-    while True:
-        #get message from output queue
-        message = node.pop_output_queue()
-        if message:
-            print(f"Message from {message['node_id']} : {message['message']}")
-
-    '''
