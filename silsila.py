@@ -10,12 +10,15 @@ from threading import Thread
 from messages import *
 from consensus import SBFT
 import uuid
+from time import sleep
 from random import randint
 class Silsila:
     def __init__(self,node_id,node_type,endpoint,port,secret_key,auth=None,DEBUG=False):
         '''
         Initialize network interface
         '''
+        
+        #define debug mode
         self.DEBUG = DEBUG
         #define secret 
         self.secret_key = secret_key
@@ -53,25 +56,36 @@ class Silsila:
         self.consensus = SBFT(self)
         #define listening flask
         self.server = Flask(__name__)
-        #define heartbeat thread
-        self.heartbeat_thread = Thread(target=self.heartbeat.heartbeat)
-        self.heartbeat_thread.daemon = True
-        
-        #define discovery thread
-        self.discovery_thread = Thread(target= self.discovery.discovery)
+        #cron interval
+        self.cron_interval = 1
+        #cron procedure list
+        self.cron_procedures = []
+        #define cron thread
+        self.cron_thread = Thread(target= self.cron)
         #self.discovery_thread = threading.Thread(target=lambda: self.discovery(self))
-        self.discovery_thread.daemon = True
+        self.cron_thread.daemon = True
         #define handler thread
         self.handler_thread = Thread(target=self.handle)
         self.handler_thread.daemon = True
         
     def start(self):
-        self.heartbeat_thread.start()
-        self.discovery_thread.start()
+        #regiser cron procedures
+        self.cron_procedures.append(self.heartbeat.cron)
+        self.cron_procedures.append(self.discovery.cron)
+        self.cron_procedures.append(self.consensus.cron)
+        #start cron thread
+        self.cron_thread.start()
+        #start handler thread
         self.handler_thread.start()
         #start flask server
         self.network.server.run( port=self.port)
-        
+     
+    def cron(self):
+        while True:
+            for procedure in self.cron_procedures:
+                procedure()
+            sleep(self.cron_interval)
+            
     def handle(self):
         '''
         start listening for incoming connections

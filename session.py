@@ -2,12 +2,13 @@ from time import mktime
 import datetime
 from random import choices
 from string import digits, ascii_uppercase
-
+from collections import OrderedDict
 class SessionManager:
     def __init__(self):
         #define session manager
-        self.discovery_sessions = {}
-        self.connection_sessions = {}
+        self.discovery_sessions =OrderedDict()
+        self.connection_sessions = OrderedDict()
+        self.node_states = OrderedDict()
    
     def create_discovery_session(self, node_id, data):
         
@@ -54,6 +55,8 @@ class SessionManager:
     def create_connection_session(self, session_id, data):
         #create new session with the given public key and type
         self.connection_sessions[session_id]= data
+        #refresh node state table
+        self.refresh_node_state_table()
         
     def update_connection_session(self, session_id, data):
         #update session with the given public key and type
@@ -71,3 +74,60 @@ class SessionManager:
         
     def get_active_nodes(self):
         return [session["node_id"] for session in self.connection_sessions.values() if session["last_active"] > mktime(datetime.datetime.now().timetuple())-60]
+
+    def get_active_nodes_with_pk(self):
+        return [{session["node_id"]:session["pk"]} for session in self.connection_sessions.values() if session["last_active"] > mktime(datetime.datetime.now().timetuple())-60]
+    
+    def get_node_state_table(self):
+        #refresh node state table
+        self.refresh_node_state_table()
+        #get nodes in state table
+        response = {}
+        for key,value in self.node_states.items():
+            if value["last_active"] > mktime(datetime.datetime.now().timetuple())-6:
+                response[key] = value["pk"]
+        return response
+    
+    
+    def update_node_state_table(self,table):
+        #refresh node state table
+        self.refresh_node_state_table()
+        #update node state table
+        for key,value in table.items():
+            #check if node is already in connection session
+            if key in self.connection_sessions:
+                continue
+            #check if node is already in node state table
+            if key in self.node_states:
+                #update last call timestamp
+                self.node_states[key]["last_active"] = mktime(datetime.datetime.now().timetuple())
+                continue
+            #update last call timestamp
+            self.node_states[key] = {"pk":value["pk"],"last_active":mktime(datetime.datetime.now().timetuple())}
+            
+    def compare_node_state_table(self,table):
+        #refresh node state table
+        self.refresh_node_state_table()
+        #compare node state table
+        for key,value in table:
+            #check if node is already in connection session
+            if key in self.connection_sessions:
+                if self.connection_sessions[key]["pk"] == value["pk"]:  
+                    continue
+                else:
+                    return False
+            #check if node is already in node state table
+            if key in self.node_states:
+                if self.node_states[key]["pk"] == value["pk"]:
+                    continue
+                else:
+                    return False
+        return True
+    
+    def refresh_node_state_table(self):
+        #refresh node state table
+        for key,value in self.connection_sessions.items():
+            if key in self.node_states:
+                continue
+            else:
+                self.node_states[key] = {"pk":value["pk"],"last_active":mktime(datetime.datetime.now().timetuple())}

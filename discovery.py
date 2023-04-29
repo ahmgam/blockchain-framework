@@ -12,16 +12,18 @@ class DiscoveryProtocol:
         self.parent = parent
         #define discovery interval
         self.discovery_interval = 10
+        #define discovery last call
+        self.last_call = mktime(datetime.datetime.now().timetuple())
         
-    def discovery(self):
-        '''
-        publish message to the network
-        '''
-        #broadcast message to the network
-        while True:
-            sleep(self.discovery_interval)
+    def cron(self):
+        #check if disvoery last call is more than discovery interval
+        if mktime(datetime.datetime.now().timetuple()) - self.last_call > self.discovery_interval:
+            #update last call
+            self.last_call = mktime(datetime.datetime.now().timetuple())
+            #start discovery
             self.discover()
-        
+            
+
     def handle(self,message):
         if message.message["type"] == "discovery_request":
             if self.parent.DEBUG:

@@ -1,4 +1,3 @@
-import requests
 from flask import Flask, Response,request
 from messages import *
 import datetime

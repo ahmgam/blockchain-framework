@@ -10,7 +10,16 @@ class HeartbeatProtocol:
         self.parent = parent
         #define heartbeat interval
         self.heartbeat_interval = 5
+        #define last heartbeat
+        self.last_call = mktime(datetime.datetime.now().timetuple())
     
+    def cron(self):
+        #check if heartbeat last call is more than discovery interval
+        if mktime(datetime.datetime.now().timetuple()) - self.last_call > self.heartbeat_interval:
+            #update last call
+            self.last_call = mktime(datetime.datetime.now().timetuple())
+            #start discovery
+            self.heartbeat()
     def handle(self,message):
         
         if message.message["type"] == "heartbeat_request":
@@ -29,18 +38,15 @@ class HeartbeatProtocol:
         '''
         send heartbeat to all nodes
         '''
-        pass
         #send heartbeat to all nodes
-        while True:
-            for session_id, session in self.parent.sessions.connection_sessions.items():
-                #check if time interval is passed
-                session_time = mktime(datetime.datetime.now().timetuple()) - session["last_heartbeat"]
-                if session_time > self.heartbeat_interval and session["status"] == "active":
-                    #send heartbeat
-                    self.send_heartbeat(session)
-                    #update last heartbeat time
-                    self.parent.sessions.connection_sessions[session_id]["last_heartbeat"] = mktime(datetime.datetime.now().timetuple())
-                    sleep(1)
+        for session_id, session in self.parent.sessions.connection_sessions.items():
+            #check if time interval is passed
+            session_time = mktime(datetime.datetime.now().timetuple()) - session["last_heartbeat"]
+            if session_time > self.heartbeat_interval and session["status"] == "active":
+                #send heartbeat
+                self.send_heartbeat(session)
+                #update last heartbeat time
+                self.parent.sessions.connection_sessions[session_id]["last_heartbeat"] = mktime(datetime.datetime.now().timetuple())
     
     def send_heartbeat(self,session):
         
@@ -49,7 +55,7 @@ class HeartbeatProtocol:
         msg_data = OrderedDict({
                 "timestamp": str(datetime.datetime.now()),
                 "counter": session["counter"]+1,
-                "data":None
+                "data":self.parent.sessions.get_node_state_table()
             })
         #serialize message
         msg_data= json.dumps(msg_data)
@@ -109,11 +115,13 @@ class HeartbeatProtocol:
             if self.parent.DEBUG:
                 print("Invalid counter")
             return
+        #update node state table
+        self.parent.sessions.update_node_state_table(message.message["message"]["data"])
         #prepare message 
         msg_data = OrderedDict({
                 "timestamp": str(datetime.datetime.now()),
                 "counter": session["counter"]+1,
-                "data":None
+                "data":self.parent.sessions.get_node_state_table()
             })
         #serialize message
         msg_data= json.dumps(msg_data)
@@ -173,6 +181,8 @@ class HeartbeatProtocol:
             if self.parent.DEBUG:
                 print("Invalid counter")
             return
+        #update node state table
+        self.parent.sessions.update_node_state_table(message.message["message"]["data"])
         #update session
         self.parent.update_connection_session(message.message["session_id"],{
             "counter":message.message["message"]["counter"],
