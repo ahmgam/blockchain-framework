@@ -85,8 +85,10 @@ class EncryptionModule:
         if type(pk) == str:
             pk = rsa.PublicKey.load_pkcs1(pk)
         #verify signature
+        if type(message) == dict:
+            message = json.dumps(message)
         try : 
-          if rsa.verify(json.dumps(message).encode("utf-8"), b64decode(signature.encode('ascii')), pk):
+          if rsa.verify(message.encode("utf-8"), b64decode(signature.encode('ascii')), pk):
             return True
         except:
           return False

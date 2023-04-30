@@ -14,39 +14,30 @@ class HeartbeatProtocol:
         self.last_call = mktime(datetime.datetime.now().timetuple())
     
     def cron(self):
-        #check if heartbeat last call is more than discovery interval
-        if mktime(datetime.datetime.now().timetuple()) - self.last_call > self.heartbeat_interval:
-            #update last call
-            self.last_call = mktime(datetime.datetime.now().timetuple())
-            #start discovery
-            self.heartbeat()
-    def handle(self,message):
-        
-        if message.message["type"] == "heartbeat_request":
-            if self.DEBUG:
-                print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting handle_heartbeat")
-            self.handle_heartbeat(message)
-        elif message.message["type"] == "heartbeat_response":
-            if self.DEBUG:
-                print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting handle_heartbeat_response")
-            self.handle_heartbeat_response(message)
-        else:
-            if self.DEBUG:
-                print(f"unknown message type {message.message['type']}")
-                
-    def heartbeat(self):
-        '''
-        send heartbeat to all nodes
-        '''
         #send heartbeat to all nodes
         for session_id, session in self.parent.sessions.connection_sessions.items():
             #check if time interval is passed
             session_time = mktime(datetime.datetime.now().timetuple()) - session["last_heartbeat"]
             if session_time > self.heartbeat_interval and session["status"] == "active":
                 #send heartbeat
+                print("sending heartbeat from cron")
                 self.send_heartbeat(session)
                 #update last heartbeat time
                 self.parent.sessions.connection_sessions[session_id]["last_heartbeat"] = mktime(datetime.datetime.now().timetuple())
+    def handle(self,message):
+        
+        if message.message["type"] == "heartbeat_request":
+            if self.parent.DEBUG:
+                print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting handle_heartbeat")
+            self.handle_heartbeat(message)
+        elif message.message["type"] == "heartbeat_response":
+            if self.parent.DEBUG:
+                print(f"Received message from {message.message['node_id']} of type {message.message['type']}, starting handle_heartbeat_response")
+            self.handle_heartbeat_response(message)
+        else:
+            if self.parent.DEBUG:
+                print(f"unknown message type {message.message['type']}")
+                
     
     def send_heartbeat(self,session):
         
@@ -64,10 +55,10 @@ class HeartbeatProtocol:
         #create heartbeat message
         payload = OrderedDict({
             "session_id": session["session_id"],
-            "parent.node_id": self.parent.node_id,
-            "parent.node_type": self.parent.node_type,
+            "node_id": self.parent.node_id,
+            "node_type": self.parent.node_type,
             "port": self.parent.port,
-            "type": "heartbeat",
+            "type": "heartbeat_request",
             "pos": self.parent.pos,
             "message":encrypted_msg
             })
@@ -85,7 +76,7 @@ class HeartbeatProtocol:
     def handle_heartbeat(self,message):
         #receive heartbeat from node
         #get session
-        session = self.get_parent.sessions.connection_sessions(message.message["session_id"])
+        session = self.parent.sessions.get_connection_sessions(message.message["session_id"])
         if not session:
             if self.parent.DEBUG:
                 print("Invalid session")
@@ -116,6 +107,7 @@ class HeartbeatProtocol:
                 print("Invalid counter")
             return
         #update node state table
+        #self.parent.server.logger.warning(f'table request : {json.dumps(message.message["message"]["data"])}' )
         self.parent.sessions.update_node_state_table(message.message["message"]["data"])
         #prepare message 
         msg_data = OrderedDict({
@@ -130,8 +122,8 @@ class HeartbeatProtocol:
         #create heartbeat message
         payload = OrderedDict({
             "session_id": session["session_id"],
-            "parent.node_id": self.parent.node_id,
-            "parent.node_type":self.parent.node_type,
+            "node_id": self.parent.node_id,
+            "node_type":self.parent.node_type,
             "port": self.parent.port,
             "type": "heartbeat_response",
             "pos": self.parent.pos,
@@ -144,14 +136,14 @@ class HeartbeatProtocol:
         #add hash and signature to message
         payload["signature"] = msg_signature
         #send message
-        self.parent.queues.put_queue({"target": session["parent.node_id"],
+        self.parent.queues.put_queue({"target": session["node_id"],
                         "message": payload,
                         "pos": self.parent.pos},"outgoing")
  
     def handle_heartbeat_response(self,message):
         #receive heartbeat from node
         #get session
-        session = self.get_parent.sessions.connection_sessions(message.message["session_id"])
+        session = self.parent.sessions.get_connection_sessions(message.message["session_id"])
         if not session:
             if self.parent.DEBUG:
                 print("Invalid session")
@@ -176,6 +168,7 @@ class HeartbeatProtocol:
             return
         #validate message
         message.message["message"] = json.loads(decrypted_msg)
+        #self.parent.server.logger.warning(f'table response : {json.dumps(message.message["message"]["data"])}' )
         #check counter
         if message.message["message"]["counter"]<session["counter"]:
             if self.parent.DEBUG:
@@ -184,7 +177,7 @@ class HeartbeatProtocol:
         #update node state table
         self.parent.sessions.update_node_state_table(message.message["message"]["data"])
         #update session
-        self.parent.update_connection_session(message.message["session_id"],{
+        self.parent.sessions.update_connection_session(message.message["session_id"],{
             "counter":message.message["message"]["counter"],
             "last_active": mktime(datetime.datetime.now().timetuple())})       
       

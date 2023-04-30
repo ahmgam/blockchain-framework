@@ -86,11 +86,11 @@ class DiscoveryProtocol:
                 },
             })
         #stringify the data payload
-        msg_data = json.dumps(payload,ensure_ascii=False)
+        msg_data = json.dumps(payload)
         #generate hash and signature
         msg_signature = EncryptionModule.sign(msg_data,self.parent.sk)
         #add hash and signature to the payload
-        payload["signature"] = str(msg_signature)
+        payload["signature"] = msg_signature
         #create message object
         message = DiscoveryMessage(payload)
         self.parent.queues.put_queue({"target": "all",
@@ -651,5 +651,5 @@ class DiscoveryProtocol:
             "approved": True,
             "status": "active",
         }
-        self.update_connection_session(session_id,session_data)
+        self.parent.sessions.update_connection_session(session_id,session_data)
         

@@ -84,7 +84,7 @@ class SessionManager:
         #get nodes in state table
         response = {}
         for key,value in self.node_states.items():
-            if value["last_active"] > mktime(datetime.datetime.now().timetuple())-6:
+            if value["last_active"] > mktime(datetime.datetime.now().timetuple())-60:
                 response[key] = value["pk"]
         return response
     
@@ -95,10 +95,10 @@ class SessionManager:
         #update node state table
         for key,value in table.items():
             #check if node is already in connection session
-            if key in self.connection_sessions:
+            if key in self.connection_sessions.keys():
                 continue
             #check if node is already in node state table
-            if key in self.node_states:
+            if key in self.node_states.keys():
                 #update last call timestamp
                 self.node_states[key]["last_active"] = mktime(datetime.datetime.now().timetuple())
                 continue
@@ -111,13 +111,13 @@ class SessionManager:
         #compare node state table
         for key,value in table:
             #check if node is already in connection session
-            if key in self.connection_sessions:
+            if key in self.connection_sessions.keys():
                 if self.connection_sessions[key]["pk"] == value["pk"]:  
                     continue
                 else:
                     return False
             #check if node is already in node state table
-            if key in self.node_states:
+            if key in self.node_states.keys():
                 if self.node_states[key]["pk"] == value["pk"]:
                     continue
                 else:
@@ -127,7 +127,7 @@ class SessionManager:
     def refresh_node_state_table(self):
         #refresh node state table
         for key,value in self.connection_sessions.items():
-            if key in self.node_states:
+            if key in self.node_states.keys():
                 continue
             else:
                 self.node_states[key] = {"pk":value["pk"],"last_active":mktime(datetime.datetime.now().timetuple())}

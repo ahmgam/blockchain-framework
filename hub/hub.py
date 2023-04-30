@@ -76,12 +76,13 @@ class Hub :
         #validate the request
         valid,resp = self.validate_request(data)
         if not valid:
+            print("invalid request of type "+ data['message']['type'])
             return resp
         #get target and message from the request body
         target_id = data['target']
         message = data['message']
         pos = data["pos"]
-        self.app.logger.warning(f"Received message from {message['node_id']} to {target_id} ")
+        self.app.logger.warning(f"Received message from {message['node_id']} to {target_id} of type {message['type']} ")
         #check if the node is already registered
         node = self.get_node(message['node_id'])
         if not node:
@@ -91,7 +92,7 @@ class Hub :
         #add the node's position to the state table
         self.add_state(message['node_id'], message['node_type'], pos)
         #store the message in the database
-        msg = self.store_message(message['node_id'], message['node_type'], target_id, message['message'])   
+        msg = self.store_message(message['node_id'], target_id, message['type'], message['message'])   
         #check if target node is registered
         if target_id != 'all':
             target = self.get_node(target_id)

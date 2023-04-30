@@ -101,7 +101,7 @@ class Silsila:
                         message =Message(message_buffer["message"]) 
                         if message.message["node_id"]==self.node_id:
                             continue
-                        if message.message["type"].startswith("discovery"):
+                        elif message.message["type"].startswith("discovery"):
                             self.discovery.handle(message)
                         elif message.message["type"].startswith("heartbeat"):
                             self.heartbeat.handle(message)
@@ -109,8 +109,9 @@ class Silsila:
                             #for test purposes
                             data = self.network.verify_data(message)
                             if data:
-                                self.network.server.logger.warning(f"Message from {data['node_id']} : {data['message']}")
-                                #self.consensus.handle(data)
+                                pass
+                                #self.network.server.logger.warning(f"Message from {data['node_id']} : {data['message']}")
+                                self.consensus.handle(data)
                         else:
                             if self.DEBUG:
                                 print(f"unknown message type {message.message['type']}")
@@ -136,5 +137,10 @@ if __name__ == "__main__":
     node_type = "uav"
     node = Silsila(node_id,node_type,"http://127.0.0.1:5000",port,secret,auth,True)
     node.start()
+    while True:
+        #pop message from output queue
+        msg = node.queues.pop_output_queue()
+        if msg:
+            node.server.logger.warning(f'{msg["node_id"]} : {msg["message"]}')
     
             

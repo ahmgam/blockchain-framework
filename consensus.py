@@ -17,7 +17,7 @@ class SBFT:
     def cron(self):
         #TODO implement cron for view timeout
         #check views for timeout
-        for view_id,view in self.views.items():
+        for view_id,view in self.views.copy().items():
             if mktime(datetime.datetime.now().timetuple()) - view['last_updated'] > self.view_timeout:
                 if self.parent.DEBUG:
                     print(f"View {view_id} timed out")
@@ -25,24 +25,36 @@ class SBFT:
         
     def handle(self, msg):
         #handle message
+        msg = msg["message"]["data"]
         operation = msg['operation']
         if operation == 'pre-prepare':
+            if self.parent.DEBUG:
+                print(f"Received message from {msg['source']} of type {msg['operation']}, starting pre-prepare")
             self.pre_prepare(msg)
         elif operation == 'prepare':
+            if self.parent.DEBUG:
+                print(f"Received message from {msg['source']} of type {msg['operation']}, starting prepare")
             self.prepare(msg)
         elif operation == 'prepare-collect':
+            if self.parent.DEBUG:
+                print(f"Received message from {msg['source']} of type {msg['operation']}, starting prepare-collect")
             self.prepare_collect(msg)
         elif operation == 'commit':
+            if self.parent.DEBUG:
+                print(f"Received message from {msg['source']} of type {msg['operation']}, starting commit")
             self.commit(msg)
         elif operation == 'commit-collect':
+            if self.parent.DEBUG:
+                print(f"Received message from {msg['source']} of type {msg['operation']}, starting commit-collect")
             self.commit_collect(msg)
         else:
-            print(f"Received message from {msg['message']['node_id']} of type {msg['message']['type']}, but no handler found")
-        pass
+            if self.parent.DEBUG:
+                print(f"Received message from {msg['message']['node_id']} of type {msg['message']['type']}, but no handler found")
+            pass
     
     def send(self,msg):
         #check message type 
-        if type(msg['message']) != dict:
+        if not type(msg['message']) in [dict,str]:
             if self.parent.DEBUG:
                 print("Invalid message type")
             return
@@ -54,7 +66,6 @@ class SBFT:
         msg_hash = EncryptionModule.hash(msg_string)
         #get node_ids 
         node_ids = self.parent.sessions.get_node_state_table()
-        node_ids.append(self.parent.node_id)
         #create view
         self.views[view_id] = {
             "timestamp":mktime(datetime.datetime.now().timetuple()),
