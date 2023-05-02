@@ -81,7 +81,6 @@ class HeartbeatProtocol:
             if self.parent.DEBUG:
                 print("Invalid session")
             return
-        
         #get message hash and signature
         buff = message.message.copy()
         msg_signature = buff.pop("signature")
@@ -117,6 +116,7 @@ class HeartbeatProtocol:
             })
         #serialize message
         msg_data= json.dumps(msg_data)
+        
         #encrypt message
         encrypted_msg = EncryptionModule.encrypt_symmetric(msg_data,session["key"])
         #create heartbeat message

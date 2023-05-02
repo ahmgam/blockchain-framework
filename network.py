@@ -35,7 +35,6 @@ class NetworkInterface:
         message = data["message"]
         #payload 
         payload = {
-            "operation":"pre-prepare",
             "message":message,
             "source":self.parent.node_id
         }

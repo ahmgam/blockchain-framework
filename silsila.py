@@ -9,6 +9,8 @@ from discovery import DiscoveryProtocol
 from threading import Thread
 from messages import *
 from consensus import SBFT
+import requests
+import sys
 import uuid
 from time import sleep
 from random import randint
@@ -43,7 +45,7 @@ class Silsila:
         #define communication module
         self.comm = CommunicationModule(self)
         #define session manager
-        self.sessions = SessionManager()
+        self.sessions = SessionManager(self)
         #define queue
         self.queues = QueueManager()
         #define network interface
@@ -128,19 +130,27 @@ class Silsila:
                 if self.DEBUG:
                     print(f"error in handling message: {e}")
                 continue
-          
+             
+
 if __name__ == "__main__":         
     secret = "secret"
     auth = '1234567890'
-    port = randint(5001,6000)
-    node_id = str(uuid.uuid4())
-    node_type = "uav"
+    if len(sys.argv) > 1:
+        port = 5000+ int(sys.argv[1])
+        node_id = str(sys.argv[1])
+        node_type = "uav"
+    else:
+        port = 5002
+        node_id = "2"
+        node_type = "uav"
     node = Silsila(node_id,node_type,"http://127.0.0.1:5000",port,secret,auth,True)
+    target_id = 0
+    self_port = 1
     node.start()
     while True:
         #pop message from output queue
         msg = node.queues.pop_output_queue()
         if msg:
-            node.server.logger.warning(f'{msg["node_id"]} : {msg["message"]}')
+            node.server.logger.warning(f'{msg["source"]} : {msg["message"]}')
     
             

@@ -3,12 +3,14 @@ import datetime
 from random import choices
 from string import digits, ascii_uppercase
 from collections import OrderedDict
+from encryption import EncryptionModule
 class SessionManager:
-    def __init__(self):
+    def __init__(self,parent):
         #define session manager
+        self.parent = parent
         self.discovery_sessions =OrderedDict()
         self.connection_sessions = OrderedDict()
-        self.node_states = OrderedDict()
+        self.node_states = OrderedDict({self.parent.node_id:{"pk":EncryptionModule.format_public_key(self.parent.pk),"last_active":mktime(datetime.datetime.now().timetuple())}})
    
     def create_discovery_session(self, node_id, data):
         
@@ -94,31 +96,22 @@ class SessionManager:
         self.refresh_node_state_table()
         #update node state table
         for key,value in table.items():
-            #check if node is already in connection session
-            if key in self.connection_sessions.keys():
-                continue
             #check if node is already in node state table
             if key in self.node_states.keys():
                 #update last call timestamp
                 self.node_states[key]["last_active"] = mktime(datetime.datetime.now().timetuple())
                 continue
             #update last call timestamp
-            self.node_states[key] = {"pk":value["pk"],"last_active":mktime(datetime.datetime.now().timetuple())}
+            self.node_states[key] = {"pk":value,"last_active":mktime(datetime.datetime.now().timetuple())}
             
     def compare_node_state_table(self,table):
         #refresh node state table
         self.refresh_node_state_table()
         #compare node state table
-        for key,value in table:
-            #check if node is already in connection session
-            if key in self.connection_sessions.keys():
-                if self.connection_sessions[key]["pk"] == value["pk"]:  
-                    continue
-                else:
-                    return False
+        for key,value in table.items():
             #check if node is already in node state table
             if key in self.node_states.keys():
-                if self.node_states[key]["pk"] == value["pk"]:
+                if self.node_states[key]["pk"] == value:
                     continue
                 else:
                     return False
@@ -127,7 +120,7 @@ class SessionManager:
     def refresh_node_state_table(self):
         #refresh node state table
         for key,value in self.connection_sessions.items():
-            if key in self.node_states.keys():
+            if value["node_id"] in self.node_states.keys():
                 continue
             else:
-                self.node_states[key] = {"pk":value["pk"],"last_active":mktime(datetime.datetime.now().timetuple())}
+                self.node_states[value["node_id"]] = {"pk":value["pk"],"last_active":mktime(datetime.datetime.now().timetuple())}
