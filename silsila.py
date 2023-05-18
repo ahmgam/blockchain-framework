@@ -43,7 +43,7 @@ class Silsila:
             self.pk, self.sk = EncryptionModule.generate_keys()
             EncryptionModule.store_keys('pk.pem', 'sk.pem',self.pk,self.sk)
         #define communication module
-        self.comm = CommunicationModule(self)
+        self.comm = CommunicationModule(self.node_id,self.endpoint,self.port,self.auth,self.DEBUG)
         #define session manager
         self.sessions = SessionManager(self)
         #define queue
@@ -56,8 +56,6 @@ class Silsila:
         self.discovery = DiscoveryProtocol(self)
         #define consensus protocol
         self.consensus = SBFT(self)
-        #define listening flask
-        self.server = Flask(__name__)
         #cron interval
         self.cron_interval = 1
         #cron procedure list
@@ -80,7 +78,7 @@ class Silsila:
         #start handler thread
         self.handler_thread.start()
         #start flask server
-        self.network.server.run( port=self.port)
+        self.comm.start()
      
     def cron(self):
         while True:
@@ -93,6 +91,10 @@ class Silsila:
         start listening for incoming connections
         '''
         while True:
+            #check if there is any message in comm buffer
+            while self.comm.is_available():
+                comm_buffer =self.comm.get()
+                self.queues.put_queue(comm_buffer["message"],comm_buffer["type"])
             #get message from queue
             try:
                 message_buffer = self.queues.pop_queue()
@@ -123,6 +125,8 @@ class Silsila:
                         except Exception as e:
                             if self.DEBUG:
                                 print(e)
+                    elif str(message_buffer["type"]) == "consensus":
+                        self.consensus.send(message_buffer['message'])
                     else:
                         if self.DEBUG:
                             print(f'unknown message type {message_buffer["type"]}')
@@ -151,6 +155,6 @@ if __name__ == "__main__":
         #pop message from output queue
         msg = node.queues.pop_output_queue()
         if msg:
-            node.server.logger.warning(f'{msg["source"]} : {msg["message"]}')
+            node.comm.server.logger.warning(f'{msg["source"]} : {msg["message"]}')
     
             

@@ -230,8 +230,8 @@ class Hub :
                 self.db.query('DELETE FROM node WHERE node_id = ?', (node['node_id'],))
 if __name__ == '__main__':
     #set environment variables
-    os.environ['HUB_DB'] = 'hub\database.db'
-    os.environ['HUB_SCHEMA'] = 'hub\schema.sql'
+    os.environ['HUB_DB'] = 'hub/database.db'
+    os.environ['HUB_SCHEMA'] = 'hub/schema.sql'
     os.environ['HUB_PORT'] = '5000'
     os.environ['HUB_AUTH'] = '1234567890'
     #run the hub

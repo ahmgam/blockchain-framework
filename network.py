@@ -16,41 +16,15 @@ class NetworkInterface:
         #define heartbeat interval
         self.heartbeat_interval = 5
         #define listening flask
-        self.server = Flask(__name__)
+        #self.server = Flask(__name__)
         #disable logging if not in debug mode
-        if not self.parent.DEBUG:
-            self.server.logger.disabled = True
-        self.server.add_url_rule('/', 'listen',lambda : self.listen(self), methods=['POST'])
+        #if not self.parent.DEBUG:
+        #    self.server.logger.disabled = True
+        #self.server.add_url_rule('/', 'listen',lambda : self.listen(self), methods=['POST'])
         #add message send endpoint
-        self.server.add_url_rule('/send', 'send',lambda : self.send(self), methods=['POST'])
+        #self.server.add_url_rule('/send', 'send',lambda : self.send(self), methods=['POST'])
         #self.server.add_url_rule('/', 'listen',self.listen, methods=['POST'])
-   
-    @staticmethod 
-    def send(self):
-        '''
-        Send message to the given public key
-        '''
-        #get data 
-        data = request.json
-        message = data["message"]
-        #payload 
-        payload = {
-            "message":message,
-            "source":self.parent.node_id
-        }
-        #send_message
-        self.parent.consensus.send(payload)
-        return Response("OK", status=200)
-    
-    @staticmethod
-    def listen(self):
-        '''
-        receive message from the network
-        '''
-        #receive message from the network and put it in the queue
-        self.parent.queues.put_queue(request.json,"incoming")
-        return Response("OK", status=200)
-  
+
     def verify_data(self,message):
         #get session
         session = self.parent.sessions.get_connection_sessions(message.message["session_id"])
@@ -124,3 +98,35 @@ class NetworkInterface:
                 "message": msg_payload,
                 "pos": self.parent.pos,
             },"outgoing")
+
+
+
+"""
+  
+    @staticmethod 
+    def send(self):
+        '''
+        Send message to the given public key
+        '''
+        #get data 
+        data = request.json
+        message = data["message"]
+        #payload 
+        payload = {
+            "message":message,
+            "source":self.parent.node_id
+        }
+        #send_message
+        self.parent.consensus.send(payload)
+        return Response("OK", status=200)
+    
+    @staticmethod
+    def listen(self):
+        '''
+        receive message from the network
+        '''
+        #receive message from the network and put it in the queue
+        self.parent.queues.put_queue(request.json,"incoming")
+        return Response("OK", status=200)
+"""
+  
