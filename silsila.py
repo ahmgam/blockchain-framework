@@ -1,5 +1,5 @@
 from network import NetworkInterface
-from connector import CommunicationModule
+from connector import HTTPCommunicaionModule
 from session import SessionManager
 from flask import Flask, request
 from encryption import EncryptionModule
@@ -43,7 +43,7 @@ class Silsila:
             self.pk, self.sk = EncryptionModule.generate_keys()
             EncryptionModule.store_keys('pk.pem', 'sk.pem',self.pk,self.sk)
         #define communication module
-        self.comm = CommunicationModule(self.node_id,self.endpoint,self.port,self.auth,self.DEBUG)
+        self.comm = HTTPCommunicaionModule(self.node_id,self.endpoint,self.port,self.auth,self.DEBUG)
         #define session manager
         self.sessions = SessionManager(self)
         #define queue

@@ -7,6 +7,14 @@ class Blockchain:
         self.all_transactions = []
         self.genesis_block()
         self.data_queue = queue.Queue()
+
+    ############################################################
+    # Database tabels
+    ############################################################
+    def create_tables(self):
+        #create record table
+        pass
+
     ############################################################
     # Blockchain operations
     ############################################################
@@ -45,34 +53,7 @@ class Blockchain:
         
     def get_from_queue(self):
         return self.data_queue.get()
-    ############################################################
-    # Consensus
-    ############################################################
-    
-    #brodcast new block to other nodes
-    def handle_consensus(self):
-        message = self.get_from_queue()
-        if message['message']['type'] == 'consensus_preprepare':
-            self.handle_preprepare(message)
-            
-        if message['message']['type'] == 'consensus_prepare':
-            self.handle_prepare(message)
-            
-        if message['message']['type'] == 'consensus_prepare-collect':
-            self.handle_prepare_collect(message)
-            
-        if message['message']['type'] == 'consensus_commit':
-            self.handle_commit(message)
-        
-        if message['message']['type'] == 'consensus_commit-collect':
-            self.handle_commit_collect(message)
-            
-        if message['message']['type'] == 'consensus_sync-request':
-            self.handle_sync_request(message)
-            
-        if message['message']['type'] == 'consensus_sync-reply':
-            self.handle_sync_reply(message)
-    
+
     '''
     import time
 import hashlib
