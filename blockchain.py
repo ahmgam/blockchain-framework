@@ -1,35 +1,106 @@
 import queue
-
-class Blockchain:
+from database import Database
+from encryption import EncryptionModule
+from collections import OrderedDict
+import json
+class blockchain:
     #initialize the blockchain
     def __init__(self):
-        self.chain = []
-        self.all_transactions = []
-        self.genesis_block()
-        self.data_queue = queue.Queue()
-
+        
+        # define database manager
+        self.db = Database("db.sqlite3","schema.sql")
+        # create tables
+        self.create_tables()
+        # define queue for storing data
+        self.genesis_transaction()
+ 
     ############################################################
     # Database tabels
     ############################################################
     def create_tables(self):
         #create record table
-        pass
+        def_query = """ CREATE TABLE IF NOT EXISTS blockchain (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id INTEGER  NOT NULL,
+            item_table TEXT NOT NULL,
+            current_hash TEXT NOT NULL,
+            combined_hash TEXT NOT NULL
+        );"""
+        self.db.query(def_query)
 
     ############################################################
-    # Blockchain operations
+    # blockchain operations
     ############################################################
     
-    #create the genesis block
-    def genesis_block(self):
+    #create the genesis transaction
+    def genesis_transaction(self):
+        #add genesis transaction to the blockchain containing 
         pass
     
-    #commit a new block to the blockchain
-    def add_block(self, transactions):
-        pass
+    #commit a new transaction to the blockchain
+    def add_transaction(self,table,data):
+        last_transaction_id = self.db.get_last_id("blockchain")
+        prev_hash = self.__get_previous_hash(last_transaction_id)
+        #add the record to it's table
+        item_id = self.db.insert(table,data)
+        #get the inserted record
+        item = self.db.select(table,["*"],{"id":item_id})[0]
+        #remove the hash from the record
+        current_hash = self.__get_current_hash(last_transaction_id,item)
+        #combine the hashes
+        combined_hash = self.__get_combined_hash(current_hash,prev_hash)
+        #add the transaction to the blockchain
+        self.db.insert("blockchain",("item_id",item_id),("item_table",table),("current_hash",current_hash),("combined_hash",combined_hash))
+        return item_id
+
+    def get_transaction(self,transaction_id):
+        transaction_data = self.db.select("blockchain",["*"],{"id":transaction_id})[0]
+        item_data = self.db.select(transaction_data["item_table"],["*"],{"id":transaction_data["item_id"]})[0]
+        return item_data
     
+    def get_record(self,table,record_id):
+        return self.db.select(table,["*"],{"id":record_id})[0]
+    
+    def filter_records(self,table,filter):
+        return self.db.select(table,["*"],filter)
+    
+    def get_blockchain(self,start_id=None,end_id = None):
+        if start_id is None or start_id < 0:
+            start_id = 0
+        if end_id is None or end_id > self.db.get_last_id("blockchain"):
+            end_id = self.db.get_last_id("blockchain")
+        blockchain = []
+        for i in range(start_id,end_id+1):
+            blockchain.append(self.get_transaction(i))
+        return blockchain
+
+    def __get_previous_hash(self,last_transaction_id=None):
+        
+        if last_transaction_id is None:
+            #add genesis transaction, get the hash of auth data
+            prev_hash = EncryptionModule.hash(self.parent.auth)
+        else:
+            #get the hash of last transaction
+            prev_hash = self.db.select("blockchain",["combined_hash"],{"id":last_transaction_id})[0]["combined_hash"]
+    
+    def __get_current_hash(self,last_transaction_id,item):
+        #remove the hash from the record
+        current_hash = EncryptionModule.hash(str(last_transaction_id + 1)+json.dumps(item, sort_keys=True))
+        return current_hash
+    
+    def __get_combined_hash(self,current_hash,prev_hash):
+        #combine the hashes
+        combined_hash = EncryptionModule.hash(current_hash+prev_hash)
+        return combined_hash
     #check if the blockchain is valid
+
+
     def validate_chain(self):
         pass
+
+    def validate_transaction(self,transaction_id):
+        pass
+        
     
     ############################################################
     # Syncing the blockchain with other nodes
