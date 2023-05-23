@@ -1,25 +1,19 @@
-CREATE TABLE IF NOT EXISTS records (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_id INTEGER  NOT NULL,
-    item_table TEXT NOT NULL,
-    current_hash TEXT NOT NULL,
-    combined_hash TEXT NOT NULL,
-);
+
 CREATE TABLE IF NOT EXISTS states (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    node_id TEXT NOT NULL PRIMARY KEY,
+    node_id TEXT NOT NULL,
     node_type TEXT NOT NULL,
-    timecreated TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-    pos_x FLOAT NOT NULL,
-    pos_y FLOAT NOT NULL,
+    timecreated TEXT NOT NULL,
+    pos_x REAL NOT NULL,
+    pos_y REAL NOT NULL,
     details TEXT
 );
 CREATE TABLE IF NOT EXISTS targets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    node_id TEXT NOT NULL PRIMARY KEY,
-    timecreated TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-    pos_x FLOAT NOT NULL,
-    pos_y FLOAT NOT NULL,
+    node_id TEXT NOT NULL,
+    timecreated TEXT NOT NULL,
+    pos_x REAL NOT NULL,
+    pos_y REAL NOT NULL,
     needed_uav INTEGER NOT NULL,
     needed_ugv INTEGER NOT NULL
 );
@@ -29,17 +23,17 @@ CREATE TABLE IF NOT EXISTS task_records (
     node_id TEXT NOT NULL,
     record_type TEXT NOT NULL,
     target_id INTEGER NOT NULL,
-    timecreated TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    timecreated TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS paths (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     node_id TEXT NOT NULL,
     node_type TEXT NOT NULL,
-    pos_x FLOAT NOT NULL,
-    pos_y FLOAT NOT NULL,
+    pos_x REAL NOT NULL,
+    pos_y REAL NOT NULL,
     target_id INTEGER NOT NULL,
     commit_id INTEGER NOT NULL,
     path_points TEXT NOT NULL,
-    distance FLOAT NOT NULL,
-    timecreated TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    distance REAL NOT NULL,
+    timecreated TEXT NOT NULL
 );

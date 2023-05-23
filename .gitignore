@@ -3,3 +3,4 @@
 **/*.pem
 **/__pycache__/
 **/.vsocde
+db.sqlite3
