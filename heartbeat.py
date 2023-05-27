@@ -46,7 +46,8 @@ class HeartbeatProtocol:
         msg_data = OrderedDict({
                 "timestamp": str(datetime.datetime.now()),
                 "counter": session["counter"]+1,
-                "data":self.parent.sessions.get_node_state_table()
+                "data":self.parent.sessions.get_node_state_table(),
+                "blockchain_status":self.parent.blockchain.get_sync_info()
             })
         #serialize message
         msg_data= json.dumps(msg_data)
@@ -108,11 +109,18 @@ class HeartbeatProtocol:
         #update node state table
         #self.parent.server.logger.warning(f'table request : {json.dumps(message.message["message"]["data"])}' )
         self.parent.sessions.update_node_state_table(message.message["message"]["data"])
+        #chcek blockchain status
+        if self.parent.blockchain.check_sync(*message.message["message"]["blockchain_status"]) == False:
+            if self.parent.DEBUG:
+                print("Un synced blockchain, sending sync request")
+            self.parent.blockchain.send_sync_request()
+            
         #prepare message 
         msg_data = OrderedDict({
                 "timestamp": str(datetime.datetime.now()),
                 "counter": session["counter"]+1,
-                "data":self.parent.sessions.get_node_state_table()
+                "data":self.parent.sessions.get_node_state_table(),
+                "blockchain_status":self.parent.blockchain.get_sync_info()
             })
         #serialize message
         msg_data= json.dumps(msg_data)
@@ -179,5 +187,10 @@ class HeartbeatProtocol:
         #update session
         self.parent.sessions.update_connection_session(message.message["session_id"],{
             "counter":message.message["message"]["counter"],
-            "last_active": mktime(datetime.datetime.now().timetuple())})       
+            "last_active": mktime(datetime.datetime.now().timetuple())})   
+        #chcek blockchain status
+        if self.parent.blockchain.check_sync(*message.message["message"]["blockchain_status"]) == False:
+            if self.parent.DEBUG:
+                print("Un synced blockchain, sending sync request")
+            self.parent.blockchain.send_sync_request()    
       

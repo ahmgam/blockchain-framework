@@ -126,49 +126,55 @@ class blockchain:
     # Syncing the blockchain with other nodes
     ############################################################
     #send sync request to other nodes
-    def check_sync(self,first_combined_hash,last_conbined_hash, record_count):
-        #first check if cimined hash exists in the blockchain
-        first_record = self.db.select("blockchain",["id","combined_hash"],("combined_hash",'==',first_combined_hash))
-        if len(first_record) == 0:
-            #if not, then return false
-            start_id = 1
-            start_hash = self.db.select("blockchain",["combined_hash"],("id",'==',1))[0]["combined_hash"]
-        else:
-            start_id = first_record[0]["id"]
-            start_hash = first_record[0]["combined_hash"]
-
+    def check_sync(self,last_conbined_hash, record_count):
+        #check if all input is not null 
+        if  last_conbined_hash is None or record_count == 0:
+            return True 
+   
         #check if last combined hash exists in the blockchain
         last_record = self.db.select("blockchain",["id","combined_hash"],("combined_hash",'==',last_conbined_hash))
         if len(last_record) == 0:
             #if not, then return false
-            end_id = self.db.get_last_id("blockchain")
-            end_hash = self.db.select("blockchain",["combined_hash"],("id",'==',end_id))[0]["combined_hash"]
+            #end_id = self.db.get_last_id("blockchain")
+            #end_hash = self.db.select("blockchain",["combined_hash"],("id",'==',end_id))[0]["combined_hash"]
+            return False        
         else:
+            #get the id of the last record
             end_id = last_record[0]["id"]
-            end_hash = last_record[0]["combined_hash"]
-        #check if the record count is equal to the number of records in the blockchain
-        if record_count == end_id - start_id + 1:
-            number_of_records = record_count
-        else:
-            number_of_records = end_id - start_id + 1
-        
-        if start_hash == first_combined_hash and end_hash == last_conbined_hash and number_of_records == record_count:
-            return True, start_hash,end_hash,number_of_records
-        else:
-            return False, start_hash,end_hash,number_of_records
+
+        #check if the number of records is equal to the number of records in the blockchain
+        if record_count != self.db.get_last_id("blockchain"):
+            return False
+        return True
     
         
     def get_sync_info(self):
-        #get the first record, last record and number of records
-        first_record = self.db.select("blockchain",["combined_hash"],("id",'==',1))[0]["combined_hash"]
-        last_record = self.db.select("blockchain",["combined_hash"],("id",'==',self.db.get_last_id("blockchain")))[0]["combined_hash"]
+ 
+        last_record = self.db.select("blockchain",["combined_hash"],("id",'==',self.db.get_last_id("blockchain")))
+        if len(last_record) == 0:
+            last_record = None
+        else:
+            last_record = last_record[0]["combined_hash"]
         number_of_records = self.db.get_last_id("blockchain")
-        return first_record,last_record,number_of_records
+        return last_record,number_of_records
     
-    def get_sync_data(self,start_hash,end_hash):
-        #get start and end id
-        start_id = self.db.select("blockchain",["id"],("combined_hash",'==',start_hash))[0]["id"]
-        end_id = self.db.select("blockchain",["id"],("combined_hash",'==',end_hash))[0]["id"]
+    def get_sync_data(self,end_hash,record_count):
+        #get end id
+ 
+        end_id = self.db.select("blockchain",["id"],("combined_hash",'==',end_hash))
+        if len(end_id) == 0 or end_hash is None:
+            end_id = self.db.get_last_id("blockchain")
+            start_id = 1
+        else:
+            end_id = end_id[0]["id"]
+            if end_id == self.db.get_last_id("blockchain"):
+                return []
+            elif end_id != record_count:
+                start_id = 1
+                end_id = self.db.get_last_id("blockchain")
+            else:
+                start_id = end_id + 1
+                end_id = self.db.get_last_id("blockchain")
         #get the blockchain between start and end id
         blockchain = []
         transactions = self.db.select("blockchain",["*"],("id",">=",start_id),("id","<=",end_id))
@@ -179,13 +185,30 @@ class blockchain:
         return blockchain
     
     def send_sync_request(self):
-        pass
+        #get the sync info
+        last_record,number_of_records = self.get_sync_info()
+        msg = {
+            "operation":"sync_request",
+            "last_record":last_record,
+            "number_of_records":number_of_records
+        }
+        #send the sync request to other nodes
+        self.parent.network.send_message('all',msg)
+
     
     #handle sync request from other nodes
-    def handle_sync_request(self):
-        pass
-    
-    def handle_sync_reply(self):
+    def handle_sync_request(self,msg):
+        #get last hash and number of records
+        last_record = msg["last_record"]
+        number_of_records = msg["number_of_records"]
+        #check if the blockchain is in sync
+        if self.check_sync(last_record,number_of_records):
+            #if it is, then send sync reply
+            self.send_sync_reply()
+        else:
+            #if it is not, then send sync data
+            self.send_sync_data()
+    def handle_sync_reply(self,msg):
         pass
     
     ############################################################

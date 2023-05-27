@@ -207,6 +207,9 @@ class Database (object):
         #check if table exists
         if not self.__table_exists(table_name):
             raise Exception(f"Table does not exists : {table_name}")
+        #check if table is empty
+        if not self.query(f"SELECT * FROM {table_name}"):
+            return 0
         return self.query(f"SELECT MAX(id) FROM '{table_name}'")[0]['MAX(id)']
     
     def initialize(self, path):
