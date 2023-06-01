@@ -9,9 +9,8 @@ from discovery import DiscoveryProtocol
 from threading import Thread
 from messages import *
 from consensus import SBFT
-import requests
+from blockchain import Blockchain
 import sys
-import uuid
 from time import sleep
 from random import randint
 class Silsila:
@@ -19,7 +18,6 @@ class Silsila:
         '''
         Initialize network interface
         '''
-        
         #define debug mode
         self.DEBUG = DEBUG
         #define secret 
@@ -54,6 +52,8 @@ class Silsila:
         self.heartbeat = HeartbeatProtocol(self)
         #define discovery protocol
         self.discovery = DiscoveryProtocol(self)
+        #define blockchain
+        self.blockchain = Blockchain(self)
         #define consensus protocol
         self.consensus = SBFT(self)
         #cron interval
@@ -73,6 +73,7 @@ class Silsila:
         self.cron_procedures.append(self.heartbeat.cron)
         self.cron_procedures.append(self.discovery.cron)
         self.cron_procedures.append(self.consensus.cron)
+        self.cron_procedures.append(self.blockchain.cron)
         #start cron thread
         self.cron_thread.start()
         #start handler thread
@@ -134,6 +135,15 @@ class Silsila:
                 if self.DEBUG:
                     print(f"error in handling message: {e}")
                 continue
+            #check if there is any message in output queue
+            output_buffer = self.queues.pop_output_queue()
+            if output_buffer:
+                try:
+                    self.blockchain.add_transaction(output_buffer["message"]["table"],output_buffer["message"]["data"])
+                except Exception as e:
+                    if self.DEBUG:
+                        print(e)
+                
              
 
 if __name__ == "__main__":         

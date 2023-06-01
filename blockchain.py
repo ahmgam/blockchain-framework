@@ -5,9 +5,9 @@ from collections import OrderedDict
 import json
 import datetime
 from time import mktime
-class blockchain:
+class Blockchain:
     #initialize the blockchain
-    def __init__(self):
+    def __init__(self,parent):
         
         # define database manager
         self.db = Database("db.sqlite3","schema.sql")
@@ -19,6 +19,8 @@ class blockchain:
         self.sync_timeout = 10
         #sync views
         self.views = OrderedDict()
+        #define parent
+        self.parent = parent
  
     ############################################################
     # Database tabels
@@ -143,11 +145,12 @@ class blockchain:
         #TODO implement cron for view timeout
         #check views for timeout
         for view_id,view in self.views.copy().items():
-            if mktime(datetime.datetime.now().timetuple()) - view['last_updated'] > self.view_timeout:
+            if mktime(datetime.datetime.now().timetuple()) - view['last_updated'] > self.view_timeout and view['status'] == "pending":
+                #evaluate the view
+                self.evaluate_view(view_id)
                 if self.parent.DEBUG:
-                    print(f"View {view_id} timed out")
-                self.views.pop(view_id)
-
+                    print(f"View {view_id} timed out, starting evaluation")
+              
     def check_sync(self,last_conbined_hash, record_count):
         #check if all input is not null 
         if  last_conbined_hash is None or record_count == 0:
@@ -255,26 +258,43 @@ class blockchain:
             self.views[view_id]["sync_data"].append(msg["message"]["data"]["sync_data"])
             #check if the number of sync data is equal to the number of nodes
             if len(self.views[view_id]["sync_data"]) == len(self.parent.sessions.get_connection_sessions()):
-                #loop through the sync data and add them to dictionary
-                sync_records = {}
-                for data in self.views[view_id]["sync_data"]:
-                    id = data.keys()[0]
-                    if id not in sync_records.keys():
-                        sync_records[id] = []
-                    sync_records[id].append(data[id])
-
-                #loop through the sync records and check if each key has the same value for all nodes
-                sync_data = []
-                for id in sync_records.keys():
-                    #get the first value
-                    value = sync_records[id][0]
-                    #check if all the values are the same
-                    if all(v == value for v in sync_records[id]):
-                        self.add_sync_record(value[0],value[1])
-                    else:
-                        print("sync data is not the same")
-                        return
-                #change the status of the view
-                self.views[view_id]["status"] = "complete"
+                self.evaluate_sync_view(view_id)
         else:
             print("view does not exist")
+
+    def evaluate_sync_view(self,view_id):
+        #check if the view exists
+        if view_id not in self.views.keys():
+            print("view does not exist")
+            return
+        #check if the view is complete
+        if self.views[view_id]["status"] != "pending":
+            return
+        #check if the number of sync data is more than half of the nodes
+        if len(self.views[view_id]["sync_data"]) < len(self.parent.sessions.get_connection_sessions())/2:
+            print("not enough sync data")
+            #mark the view as incomplete
+            self.views[view_id]["status"] = "incomplete"
+            return
+
+        #loop through the sync data and add them to dictionary
+        sync_records = {}
+        for data in self.views[view_id]["sync_data"]:
+            id = data.keys()[0]
+            if id not in sync_records.keys():
+                sync_records[id] = []
+            sync_records[id].append(data[id])
+
+        #loop through the sync records and check if each key has the same value for all nodes
+        sync_data = []
+        for id in sync_records.keys():
+            #get the first value
+            value = sync_records[id][0]
+            #check if all the values are the same
+            if all(v == value for v in sync_records[id]):
+                self.add_sync_record(value[0],value[1])
+            else:
+                print("sync data is not the same")
+                return
+        #change the status of the view
+        self.views[view_id]["status"] = "complete"
