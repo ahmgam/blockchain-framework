@@ -3,6 +3,8 @@ from database import Database
 from encryption import EncryptionModule
 from collections import OrderedDict
 import json
+import datetime
+from time import mktime
 class blockchain:
     #initialize the blockchain
     def __init__(self):
@@ -13,6 +15,10 @@ class blockchain:
         self.create_tables()
         # define queue for storing data
         self.genesis_transaction()
+        #sync timeout
+        self.sync_timeout = 10
+        #sync views
+        self.views = OrderedDict()
  
     ############################################################
     # Database tabels
@@ -37,6 +43,12 @@ class blockchain:
         #add genesis transaction to the blockchain containing 
         pass
     
+    def add_sync_record(self,transaction_record,data_record):
+        #add the transaction to the blockchain
+        self.db.insert("blockchain",("item_id",transaction_record["id"]),("item_table",transaction_record["item_table"]),("current_hash",transaction_record["current_hash"]),("combined_hash",transaction_record["combined_hash"]))
+        #add the data to the blockchain
+        self.db.insert(transaction_record["item_table"],*[(key,value) for key,value in data_record.items()])
+
     #commit a new transaction to the blockchain
     def add_transaction(self,table,data):
         last_transaction_id = self.db.get_last_id("blockchain")
@@ -82,6 +94,7 @@ class blockchain:
         else:
             #get the hash of last transaction
             prev_hash = self.db.select("blockchain",["combined_hash"],{"id":last_transaction_id})[0]["combined_hash"]
+        return prev_hash
     
     def __get_current_hash(self,last_transaction_id,item):
         #remove the hash from the record
@@ -126,6 +139,15 @@ class blockchain:
     # Syncing the blockchain with other nodes
     ############################################################
     #send sync request to other nodes
+    def cron(self):
+        #TODO implement cron for view timeout
+        #check views for timeout
+        for view_id,view in self.views.copy().items():
+            if mktime(datetime.datetime.now().timetuple()) - view['last_updated'] > self.view_timeout:
+                if self.parent.DEBUG:
+                    print(f"View {view_id} timed out")
+                self.views.pop(view_id)
+
     def check_sync(self,last_conbined_hash, record_count):
         #check if all input is not null 
         if  last_conbined_hash is None or record_count == 0:
@@ -181,186 +203,78 @@ class blockchain:
         for transaction in transactions:
             #get the item
             item = self.get_record(transaction["item_table"],transaction["item_id"])
-            blockchain.append((transaction,item))
+            blockchain.append({transaction["id"]:(transaction,item)})
         return blockchain
     
     def send_sync_request(self):
         #get the sync info
         last_record,number_of_records = self.get_sync_info()
+        #add sync view
+        view_id = EncryptionModule.hash(str(last_record)+str(number_of_records)+str(mktime(datetime.datetime.now().timetuple())))
+        self.views[view_id] = {
+            "last_updated":mktime(datetime.datetime.now().timetuple()),
+            "last_record":last_record,
+            "number_of_records":number_of_records,
+            "status":"pending",
+            "sync_data":[]
+        }
+
         msg = {
             "operation":"sync_request",
             "last_record":last_record,
-            "number_of_records":number_of_records
+            "number_of_records":number_of_records,
+            "view_id":view_id
         }
         #send the sync request to other nodes
         self.parent.network.send_message('all',msg)
 
-    
     #handle sync request from other nodes
     def handle_sync_request(self,msg):
         #get last hash and number of records
-        last_record = msg["last_record"]
-        number_of_records = msg["number_of_records"]
+        node_id = msg["node_id"]
+        last_record = msg["message"]["data"]["last_record"]
+        number_of_records = msg["message"]["data"]["number_of_records"]
+        view_id = msg["message"]["data"]["view_id"]
         #check if the blockchain is in sync
         if self.check_sync(last_record,number_of_records):
-            #if it is, then send sync reply
-            self.send_sync_reply()
-        else:
-            #if it is not, then send sync data
-            self.send_sync_data()
+            #if it is, then send a sync reply
+            msg = {
+                "operation":"sync_reply",
+                "last_record":last_record,
+                "number_of_records":number_of_records,
+                "sync_data":self.get_sync_data(last_record,number_of_records),
+                "view_id":view_id
+            }
+            self.parent.network.send_message(node_id,msg)
+ 
     def handle_sync_reply(self,msg):
-        pass
-    
-    ############################################################
-    # Queue operations
-    ############################################################
-    def add_to_queue(self, data):
-        self.data_queue.put(data)
-        
-    def get_from_queue(self):
-        return self.data_queue.get()
+        #check if the view exists
+        view_id = msg["message"]["data"]["view_id"]
+        if view_id in self.views.keys():
+            #if it does, then add the sync data to the view
+            self.views[view_id]["sync_data"].append(msg["message"]["data"]["sync_data"])
+            #check if the number of sync data is equal to the number of nodes
+            if len(self.views[view_id]["sync_data"]) == len(self.parent.sessions.get_connection_sessions()):
+                #loop through the sync data and add them to dictionary
+                sync_records = {}
+                for data in self.views[view_id]["sync_data"]:
+                    id = data.keys()[0]
+                    if id not in sync_records.keys():
+                        sync_records[id] = []
+                    sync_records[id].append(data[id])
 
-    '''
-    import time
-import hashlib
-import random
-
-# Define constants
-NUM_NODES = 4  # including primary
-NUM_BACKUPS = NUM_NODES - 1
-NUM_FAULTY = 1
-LOW_WATER_MARK = 1
-HIGH_WATER_MARK = 10
-PREPARE_TIMEOUT = 5  # in seconds
-MAX_PREPARE_FAILURES = NUM_FAULTY + 1  # f+1
-MAX_PREPARE_TIMEOUTS = NUM_FAULTY + 1  # f+1
-PREPARE_COLLECT_TIMEOUT = 10  # in seconds
-PRIMARY_TIMEOUT_THRESHOLD = 3  # number of prepare timeouts before switching primary
-
-# Define functions for generating keys and signatures
-def generate_key():
-    return hashlib.sha256(str(random.randint(0, 1000000)).encode('utf-8')).hexdigest()
-
-def sign_message(message, key):
-    return hashlib.sha256((message + key).encode('utf-8')).hexdigest()
-
-def verify_signature(message, signature, key):
-    return signature == hashlib.sha256((message + key).encode('utf-8')).hexdigest()
-
-# Define classes for nodes and messages
-class Node:
-    def __init__(self, node_id, is_primary):
-        self.node_id = node_id
-        self.is_primary = is_primary
-        self.key = generate_key()  # generate key for signing messages
-        self.log = []  # to store messages
-        self.current_view = 0
-        self.current_seq_num = 0
-        self.current_nst = 0
-        self.pending_requests = []  # to store pending client requests
-        self.prepared_messages = []  # to store messages for which prepare phase is done
-        self.committed_messages = []  # to store messages for which commit phase is done
-        self.is_active = False
-        self.prepare_failures = 0
-        self.prepare_timeouts = 0
-        self.primary_timeout_counter = 0
-
-    def send_message(self, message, recipients):
-        for recipient in recipients:
-            recipient.receive_message(message)
-
-    def receive_message(self, message):
-        # Handle prepare-fail message
-        if message.startswith("<<prepare-fail"):
-            view = int(message.split()[1])
-            sigma_p = message.split()[3]
-            if view == self.current_view:
-                self.switch_to_next_view()
-
-        # Handle prepare-timeout message
-        elif message.startswith("<<prepare-timeout"):
-            view = int(message.split()[2])
-            sigma_p = message.split()[4]
-            if view == self.current_view:
-                # Extract prepare messages in sigma_p
-                prepare_messages = [m for m in self.log if m.startswith("<<pre-prepare") and m.split()[1] == str(view) and m.split()[4] == sigma_p]
-                if len(prepare_messages) >= 2*NUM_FAULTY + 1:
-                    # There are enough correct prepare messages, so switch to next view
-                    self.switch_to_next_view()
-                else:
-                    # Consensus at prepare stage degenerates to PBFT
-                    self.log = []
-                    self.prepared_messages = []
-                    self.prepare_failures = 0
-                    self.prepare_timeouts = 0
-                    self.current_seq_num = 0
-                    self.current_nst = 0
-                    self.primary_timeout_counter = 0
-                    self.pending_requests = []
-                    self.current_view += 1
-                    self.is_primary = (self.node_id == self.current_view % NUM_NODES)
-                    self.prepare_phase()
-
-        # Handle prepare-collect message
-        elif message.startswith("<<prepare-collect"):
-            view = int(message.split()[1])
-            seq_num = int(message.split()[2])
-            nst = int(message.split()[3])
-            sigma_p = message.split()[4]
-            if view == self.current_view and nst == self.current_nst:
-                prepare_message = "<<pre-prepare " + str(view) + " " + str(seq_num) + " " + str(nst) + " " + sigma_p
-                self.log.append(prepare_message)
-                self.pending_requests.append(message.split()[5:])
-                if len(self.log) == NUM_NODES - NUM_FAULTY:
-                    self.prepare_phase()
-
-        # Handle pre-prepare message
-        elif message.startswith("<<pre-prepare"):
-            view = int(message.split()[1])
-            seq_num = int(message.split()[2])
-            nst = int(message.split()[3])
-            sigma_p = message.split()[4]
-            if view == self.current_view and self.is_primary and nst >= self.current_nst:
-                preprepare_message = "<<pre-prepare " + str(view) + " " + str(seq_num) + " " + str(nst) + " " + sigma_p
-                self.log.append(preprepare_message)
-                self.current_seq_num = seq_num
-                self.current_nst = nst
-                for backup in self.backups:
-                    backup.send_message(preprepare_message, self.backups)
-                self.prepare_phase()
-
-        # Handle prepare message
-        elif message.startswith("<<prepare"):
-            view = int(message.split()[1])
-            seq_num = int(message.split()[2])
-            nst = int(message.split()[3])
-            sigma_p = message.split()[4]
-            sigma = message.split()[5]
-            if view == self.current_view and nst == self.current_nst:
-                if verify_signature("<<pre-prepare " + str(view) + " " + str(seq_num) + " " + str(nst) + " " + sigma_p, sigma, self.key):
-                    prepare_message = "<<prepare " + str(view) + " " + str(seq_num) + " " + str(nst) + " " + sigma_p + " " + sigma
-                    self.log.append(prepare_message)
-                    self.prepared_messages.append(prepare_message)
-                    if len(self.prepared_messages) == NUM_NODES - NUM_FAULTY:
-                        self.commit_phase()
-
-        # Handle commit message
-        elif message.startswith("<<commit"):
-            view = int(message.split()[1])
-            seq_num = int(message.split()[2])
-            nst = int(message.split()[3])
-            sigma_p = message.split()[4]
-            sigma = message.split()[5]
-            if view == self.current_view and nst == self.current_nst:
-                if verify_signature("<<pre-prepare " + str(view) + " " + str(seq_num) + " " + str(nst) + " " + sigma_p, sigma, self.key):
-                    commit_message = "<<commit " + str(view) + " " + str(seq_num) + " " + str(nst) + " " + sigma_p + " " + sigma
-                    self.log.append(commit_message)
-                    self.committed_messages.append(commit_message)
-                    if len(self.committed_messages) == NUM_NODES - NUM_FAULTY:
-                        self.execute_requests()
-
-    def prepare_phase(self):
-        if self.is_primary:
-            prepare_message = "<<pre-prepare " + str(self.current_view) + " " + str(self.current_seq_num) + " " + str(self.current_nst) + "
-
-    '''
+                #loop through the sync records and check if each key has the same value for all nodes
+                sync_data = []
+                for id in sync_records.keys():
+                    #get the first value
+                    value = sync_records[id][0]
+                    #check if all the values are the same
+                    if all(v == value for v in sync_records[id]):
+                        self.add_sync_record(value[0],value[1])
+                    else:
+                        print("sync data is not the same")
+                        return
+                #change the status of the view
+                self.views[view_id]["status"] = "complete"
+        else:
+            print("view does not exist")

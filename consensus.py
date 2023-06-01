@@ -47,6 +47,14 @@ class SBFT:
             if self.parent.DEBUG:
                 print(f"Received message from {msg['source']} of type {msg['operation']}, starting commit-collect")
             self.commit_collect(msg)
+        elif operation == 'sync_request':
+            if self.parent.DEBUG:
+                print(f"Received message from {msg['source']} of type {msg['operation']}, starting sync_request")
+            self.parent.blockchain.handle_sync_request(msg)
+        elif operation == 'sync_reply':
+            if self.parent.DEBUG:
+                print(f"Received message from {msg['source']} of type {msg['operation']}, starting sync_response")
+            self.parent.blockchain.handle_sync_reply(msg)
         else:
             if self.parent.DEBUG:
                 print(f"Received message from {msg['message']['node_id']} of type {msg['message']['type']}, but no handler found")
