@@ -13,7 +13,8 @@ from blockchain import Blockchain
 import sys
 from time import sleep
 from random import randint
-class Silsila:
+import rospy
+class RosChain:
     def __init__(self,node_id,node_type,endpoint,port,secret_key,auth=None,DEBUG=False):
         '''
         Initialize network interface
@@ -60,32 +61,17 @@ class Silsila:
         self.cron_interval = 1
         #cron procedure list
         self.cron_procedures = []
-        #define cron thread
-        self.cron_thread = Thread(target= self.cron)
-        #self.discovery_thread = threading.Thread(target=lambda: self.discovery(self))
-        self.cron_thread.daemon = True
-        #define handler thread
-        self.handler_thread = Thread(target=self.handle)
-        self.handler_thread.daemon = True
-        
-    def start(self):
-        #regiser cron procedures
+        #register cron procedures
         self.cron_procedures.append(self.heartbeat.cron)
         self.cron_procedures.append(self.discovery.cron)
         self.cron_procedures.append(self.consensus.cron)
         self.cron_procedures.append(self.blockchain.cron)
-        #start cron thread
-        self.cron_thread.start()
-        #start handler thread
-        self.handler_thread.start()
-        #start flask server
-        self.comm.start()
-     
+        #define ros node
+        self.node = rospy.init_node("silsila", anonymous=True)
+           
     def cron(self):
-        while True:
-            for procedure in self.cron_procedures:
-                procedure()
-            sleep(self.cron_interval)
+        for procedure in self.cron_procedures:
+            procedure()
             
     def handle(self):
         '''
@@ -143,6 +129,8 @@ class Silsila:
                 except Exception as e:
                     if self.DEBUG:
                         print(e)
+            #start cron
+            self.cron()
                 
              
 
@@ -157,7 +145,7 @@ if __name__ == "__main__":
         port = 5002
         node_id = "2"
         node_type = "uav"
-    node = Silsila(node_id,node_type,"http://127.0.0.1:5000",port,secret,auth,True)
+    node = RosChain(node_id,node_type,"http://127.0.0.1:5000",port,secret,auth,True)
     target_id = 0
     self_port = 1
     node.start()
